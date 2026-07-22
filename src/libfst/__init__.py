@@ -7,4 +7,5 @@ __description__ = "GTKWave FST Package"
 
 __all__ = [
     "Enum",
+    "hier",
 ]

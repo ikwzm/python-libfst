@@ -22,6 +22,7 @@ assert author_email
 assert description
 
 enum_name   = 'Enum'
+hier_name   = 'hier'
 extensions  = [
     Extension(
         f'{package_name}.{enum_name}',
@@ -29,6 +30,14 @@ extensions  = [
             str(source_dir / 'enum.c'),
         ],
         define_macros = [('MODULE_NAME', enum_name)],
+        include_dirs  = [str(source_dir)],
+    ),
+    Extension(
+        f'{package_name}.{hier_name}',
+        sources = [
+            str(source_dir / 'hier.c'),
+        ],
+        define_macros = [('MODULE_NAME', hier_name)],
         include_dirs  = [str(source_dir)],
     ),
 ]    
