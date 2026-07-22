@@ -46,7 +46,7 @@
 #define OBJECT_NAME         Reader
 #endif
 
-#define MODULE_VERSION      "0.0.1"
+#define MODULE_VERSION      "0.0.2"
 #define MODULE_AUTHOR       "Ichiro Kawazome"
 #define MODULE_AUTHOR_EMAIL "ichiro_k@ca2-so-net.ne.jp"
 #define MODULE_LICENSE      "BSD 2-Clause"
@@ -57,6 +57,8 @@
 #define PACKAGE_NAME_STRING NAME_TO_STR(PACKAGE_NAME)
 #define MODULE_NAME_STRING  NAME_TO_STR(MODULE_NAME)
 #define OBJECT_NAME_STRING  NAME_TO_STR(OBJECT_NAME)
+
+static PyObject* hier_module = NULL;
 
 typedef struct {
     PyObject_HEAD
@@ -118,6 +120,62 @@ reader_close(reader_object* self, PyObject* Py_UNUSED(args))
         self->ctx = NULL;
     }
     Py_RETURN_NONE;
+}
+
+typedef struct {
+    PyObject_HEAD
+    reader_object* reader;
+} reader_hier_iterator;
+
+static PyObject*
+reader_hier_iterator_next(reader_hier_iterator* iter)
+{
+    struct fstHier* hier;
+    hier = fstReaderIterateHier(iter->reader->ctx);
+    if (hier == NULL) {
+        PyErr_SetNone(PyExc_StopIteration);
+        return NULL;
+    }
+    return PyObject_CallMethod(hier_module, "from_fst", "K", (unsigned long long)hier);
+}
+
+static void
+reader_hier_iterator_dealloc(reader_hier_iterator* iter)
+{
+    Py_XDECREF(iter->reader);
+    Py_TYPE(iter)->tp_free((PyObject*)iter);
+}
+
+static PyObject*
+reader_hier_iterator_iter(PyObject* self)
+{
+    Py_INCREF(self);
+    return self;
+}
+
+static PyTypeObject reader_hier_iterator_type = {
+    PyVarObject_HEAD_INIT(NULL, 0)
+    .tp_name       = PACKAGE_NAME_STRING "." MODULE_NAME_STRING "." "HierIterator",
+    .tp_basicsize  = sizeof(reader_hier_iterator),
+    .tp_dealloc    = (destructor)reader_hier_iterator_dealloc,
+    .tp_flags      = Py_TPFLAGS_DEFAULT,
+    .tp_iter       = reader_hier_iterator_iter,
+    .tp_iternext   = (iternextfunc)reader_hier_iterator_next,
+    .tp_doc        = "FST hierarchy iterator",
+};
+    
+static PyObject*
+reader_hiers(reader_object *self, PyObject *Py_UNUSED(args))
+{
+    reader_hier_iterator* iter = PyObject_New(reader_hier_iterator, &reader_hier_iterator_type);
+    if (iter == NULL)
+        return NULL;
+
+    iter->reader = Py_NewRef(self);
+
+    fstReaderIterateHierRewind(self->ctx);
+
+    return (PyObject*)iter;
 }
 
 #define DEFINE_READER_PROPERTY_UINT64_GETTER(name, fst_func)        \
@@ -190,6 +248,16 @@ static PyGetSetDef  reader_getset[] = {
 };
 
 static PyMethodDef  reader_methods[] = {
+    {   "hiers",
+        (PyCFunction)reader_hiers,
+        METH_NOARGS,
+        PyDoc_STR(
+            "hiers()\n"
+            "--\n"
+            "\n"
+            "Return an iterator over FST hierarchy objects."
+        )
+    },
     {   "close",
         (PyCFunction)reader_close,
         METH_NOARGS,
@@ -239,6 +307,10 @@ PYINIT_FUNC(MODULE_NAME) {
         return NULL;
     }
 
+    if (PyType_Ready(&reader_hier_iterator_type) < 0) {
+        return NULL;
+    }
+
     m = PyModule_Create(&reader_module);
     if (m == NULL) {
         return NULL;
@@ -249,6 +321,15 @@ PYINIT_FUNC(MODULE_NAME) {
         Py_DECREF(&reader_type);
         Py_DECREF(m);
         return NULL;
+    }
+
+    if (hier_module == NULL) {
+        hier_module = PyImport_ImportModule(PACKAGE_NAME_STRING ".hier");
+        if (hier_module == NULL) {
+            Py_DECREF(&reader_type);
+            Py_DECREF(m);
+            return NULL;
+        }
     }
 
     return m;
