@@ -46,7 +46,7 @@
 #define OBJECT_NAME         Reader
 #endif
 
-#define MODULE_VERSION      "0.0.2"
+#define MODULE_VERSION      "0.0.3"
 #define MODULE_AUTHOR       "Ichiro Kawazome"
 #define MODULE_AUTHOR_EMAIL "ichiro_k@ca2-so-net.ne.jp"
 #define MODULE_LICENSE      "BSD 2-Clause"
@@ -178,6 +178,160 @@ reader_hiers(reader_object *self, PyObject *Py_UNUSED(args))
     return (PyObject*)iter;
 }
 
+typedef struct {
+    PyObject_HEAD
+    reader_object* reader;
+    PyObject*      events;
+    Py_ssize_t     index;
+    int            loaded;
+} reader_block_iterator;
+
+static void
+reader_value_change_callback(void*                user_data,
+                             uint64_t             time     ,
+                             fstHandle            facidx   ,
+                             const unsigned char* value    )
+{
+    reader_block_iterator* iter = (reader_block_iterator*)user_data;
+    PyObject* item  = Py_BuildValue("(KKs)",
+                                    (unsigned long long)time,
+                                    (unsigned long long)facidx,
+                                    value);
+    if (item == NULL)
+        return;
+
+    if (PyList_Append(iter->events, item) < 0) {
+        Py_DECREF(item);
+        return;
+    }
+    Py_DECREF(item);
+}
+
+static PyObject*
+reader_block_iterator_iter(PyObject* self)
+{
+    Py_INCREF(self);
+    return self;
+}
+
+static PyObject*
+reader_block_iterator_next(reader_block_iterator* iter)
+{
+    if (!iter->loaded) {
+        fstReaderIterBlocks(iter->reader->ctx,
+                            reader_value_change_callback,
+                            iter,
+                            NULL
+        );
+        iter->loaded = 1;
+    }
+    if (iter->index >= PyList_Size(iter->events)) {
+        PyErr_SetNone(PyExc_StopIteration);
+        return NULL;
+    }
+    PyObject* item = PyList_GET_ITEM(iter->events, iter->index);
+    iter->index++;
+    Py_INCREF(item);
+    return item;
+}
+
+static void
+reader_block_iterator_dealloc(reader_block_iterator* iter)
+{
+    Py_XDECREF(iter->reader);
+    Py_XDECREF(iter->events);
+    Py_TYPE(iter)->tp_free((PyObject*)iter);
+}
+
+static PyTypeObject reader_block_iterator_type = {
+    PyVarObject_HEAD_INIT(NULL, 0)
+    .tp_name       = PACKAGE_NAME_STRING "." MODULE_NAME_STRING ".BlockIterator",
+    .tp_basicsize  = sizeof(reader_block_iterator),
+    .tp_dealloc    = (destructor)reader_block_iterator_dealloc,
+    .tp_flags      = Py_TPFLAGS_DEFAULT,
+    .tp_iter       = reader_block_iterator_iter,
+    .tp_iternext   = (iternextfunc)reader_block_iterator_next,
+    .tp_doc        = "FST block iterator",
+};
+
+static PyObject*
+reader_blocks(reader_object *self, PyObject *Py_UNUSED(args))
+{
+    reader_block_iterator* iter = PyObject_New(reader_block_iterator, &reader_block_iterator_type);
+
+    if (iter == NULL)
+        return NULL;
+
+    iter->reader = Py_NewRef(self);
+
+    iter->events = PyList_New(0);
+    if (iter->events == NULL) {
+        Py_DECREF(iter);
+        return NULL;
+    }
+    iter->index  = 0;
+    iter->loaded = 0;
+
+    return (PyObject*)iter;
+}
+
+static PyObject*
+reader_clear_facility_process_mask(reader_object *self, PyObject *args, PyObject *kwds)
+{
+    static char*       kwlist[] = { "handle", NULL };
+    unsigned long long handle;
+
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "K",kwlist, &handle))
+        return NULL;
+
+    fstReaderClrFacProcessMask(self->ctx, (fstHandle)handle);
+
+    Py_RETURN_NONE;
+}
+
+static PyObject*
+reader_clear_facility_process_mask_all(reader_object *self, PyObject* Py_UNUSED(args))
+{
+    fstReaderClrFacProcessMaskAll(self->ctx);
+    Py_RETURN_NONE;
+}
+
+static PyObject*
+reader_set_facility_process_mask(reader_object *self, PyObject *args, PyObject *kwds)
+{
+    static char*       kwlist[] = { "handle", NULL };
+    unsigned long long handle;
+
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "K",kwlist, &handle))
+        return NULL;
+
+    fstReaderSetFacProcessMask(self->ctx, (fstHandle)handle);
+
+    Py_RETURN_NONE;
+}
+
+static PyObject*
+reader_set_facility_process_mask_all(reader_object *self, PyObject* Py_UNUSED(args))
+{
+    fstReaderSetFacProcessMaskAll(self->ctx);
+    Py_RETURN_NONE;
+}
+
+static PyObject*
+reader_get_facility_process_mask(reader_object *self, PyObject *args, PyObject *kwds)
+{
+    static char*       kwlist[] = { "handle", NULL };
+    unsigned long long handle;
+    int                mask;
+
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "K",kwlist, &handle))
+        return NULL;
+
+    mask = fstReaderGetFacProcessMask(self->ctx, (fstHandle)handle);
+
+    return PyBool_FromLong(mask);
+}
+
 #define DEFINE_READER_PROPERTY_UINT64_GETTER(name, fst_func)        \
 static PyObject*                                                    \
 reader_get_ ## name(reader_object* self, PyObject* Py_UNUSED(args)) \
@@ -248,6 +402,56 @@ static PyGetSetDef  reader_getset[] = {
 };
 
 static PyMethodDef  reader_methods[] = {
+    {   "set_facility_process_mask",
+        (PyCFunction)reader_set_facility_process_mask,
+        METH_VARARGS | METH_KEYWORDS,
+        PyDoc_STR(
+           "set_facility_process_mask(handle)\n"
+           "--\n"
+           "\n"
+           "Enable value-change processing for the specified facility handle."
+        )
+    },
+    {   "set_facility_process_mask_all",
+        (PyCFunction)reader_set_facility_process_mask_all,
+        METH_VARARGS,
+        PyDoc_STR(
+            "set_facility_process_mask_all()\n"
+            "--\n"
+            "\n"
+            "Enable value-change processing for all facilities."
+        )
+    },
+    {   "clear_facility_process_mask",
+        (PyCFunction)reader_clear_facility_process_mask,
+        METH_VARARGS | METH_KEYWORDS,
+        PyDoc_STR(
+            "clear_facility_process_mask(handle)\n"
+            "--\n"
+            "\n"
+            "Disable value-change processing for the specified facility handle."
+        )
+    },
+    {   "clear_facility_process_mask_all",
+        (PyCFunction)reader_clear_facility_process_mask_all,
+        METH_VARARGS,
+        PyDoc_STR(
+            "clear_facility_process_mask_all()\n"
+            "--\n"
+            "\n"
+            "Disable value-change processing for all facilities."
+        )
+    },
+    {   "get_facility_process_mask",
+        (PyCFunction)reader_get_facility_process_mask,
+        METH_VARARGS | METH_KEYWORDS,
+        PyDoc_STR(
+            "get_facility_process_mask(handle)\n"
+            "--\n"
+            "\n"
+            "Return True if value-change processing is enabled for the specified facility."
+       )
+    },
     {   "hiers",
         (PyCFunction)reader_hiers,
         METH_NOARGS,
@@ -256,6 +460,18 @@ static PyMethodDef  reader_methods[] = {
             "--\n"
             "\n"
             "Return an iterator over FST hierarchy objects."
+        )
+    },
+    {   "blocks",
+        (PyCFunction)reader_blocks,
+        METH_NOARGS,
+        PyDoc_STR(
+          "blocks()\n"
+          "--\n"
+          "\n"
+          "Return an iterator over FST value changes.\n"
+          "Each item is returned as a tuple:\n"
+          "    (time, facidx, value)\n"
         )
     },
     {   "close",
@@ -308,6 +524,10 @@ PYINIT_FUNC(MODULE_NAME) {
     }
 
     if (PyType_Ready(&reader_hier_iterator_type) < 0) {
+        return NULL;
+    }
+
+    if (PyType_Ready(&reader_block_iterator_type) < 0) {
         return NULL;
     }
 
