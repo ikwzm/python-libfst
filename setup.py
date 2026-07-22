@@ -23,6 +23,7 @@ assert description
 
 enum_name   = 'Enum'
 hier_name   = 'hier'
+writer_name = 'writer'
 extensions  = [
     Extension(
         f'{package_name}.{enum_name}',
@@ -38,6 +39,17 @@ extensions  = [
             str(source_dir / 'hier.c'),
         ],
         define_macros = [('MODULE_NAME', hier_name)],
+        include_dirs  = [str(source_dir)],
+    ),
+    Extension(
+        f'{package_name}.{writer_name}',
+        sources = [
+            str(source_dir / 'writer.c'),
+            str(source_dir / 'libfst' / 'fstapi.c'),
+            str(source_dir / 'libfst' / 'fastlz.c'),
+            str(source_dir / 'libfst' / 'lz4.c'   ),
+        ],
+        define_macros = [('MODULE_NAME', writer_name)],
         include_dirs  = [str(source_dir)],
     ),
 ]    
