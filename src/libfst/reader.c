@@ -46,7 +46,7 @@
 #define OBJECT_NAME         Reader
 #endif
 
-#define MODULE_VERSION      "0.0.3"
+#define MODULE_VERSION      "0.0.4"
 #define MODULE_AUTHOR       "Ichiro Kawazome"
 #define MODULE_AUTHOR_EMAIL "ichiro_k@ca2-so-net.ne.jp"
 #define MODULE_LICENSE      "BSD 2-Clause"
@@ -58,11 +58,33 @@
 #define MODULE_NAME_STRING  NAME_TO_STR(MODULE_NAME)
 #define OBJECT_NAME_STRING  NAME_TO_STR(OBJECT_NAME)
 
+#ifndef HIER_MODULE_NAME
+#define HIER_MODULE_NAME    hier
+#endif
+
 static PyObject* hier_module = NULL;
+
+static int
+import_hier_module(void)
+{
+    if (hier_module == NULL) {
+        hier_module = PyImport_ImportModule(PACKAGE_NAME_STRING "." NAME_TO_STR(HIER_MODULE_NAME));
+        if (hier_module == NULL)
+            return -1;   /* ImportError is already set by PyImport_ImportModule() */
+    }
+    return 0;
+}
+
+static PyObject*
+call_hier_from_fst(struct fstHier* hier)
+{
+    return PyObject_CallMethod(hier_module, "from_fst", "K", (unsigned long long)hier);
+}
 
 typedef struct {
     PyObject_HEAD
     fstReaderContext* ctx;
+    PyObject*         scope_info_list;
 } reader_object;
 
 static PyObject*
@@ -99,6 +121,8 @@ reader_object_init(reader_object* self, PyObject* args, PyObject* kwdict)
         return -1;
     }
 
+    self->scope_info_list = PyList_New(0);
+    
     return 0;
 }
 
@@ -108,6 +132,7 @@ reader_object_dealloc(reader_object* self)
     if (self->ctx != NULL) {
         fstReaderClose(self->ctx);
         self->ctx = NULL;
+        Py_CLEAR(self->scope_info_list);
     }
     Py_TYPE(self)->tp_free((PyObject*)self);
 }
@@ -118,6 +143,7 @@ reader_close(reader_object* self, PyObject* Py_UNUSED(args))
     if (self->ctx != NULL) {
         fstReaderClose(self->ctx);
         self->ctx = NULL;
+        Py_CLEAR(self->scope_info_list);
     }
     Py_RETURN_NONE;
 }
@@ -136,7 +162,7 @@ reader_hier_iterator_next(reader_hier_iterator* iter)
         PyErr_SetNone(PyExc_StopIteration);
         return NULL;
     }
-    return PyObject_CallMethod(hier_module, "from_fst", "K", (unsigned long long)hier);
+    return call_hier_from_fst(hier);
 }
 
 static void
@@ -176,6 +202,110 @@ reader_hiers(reader_object *self, PyObject *Py_UNUSED(args))
     fstReaderIterateHierRewind(self->ctx);
 
     return (PyObject*)iter;
+}
+
+static PyObject*
+reader_reset_scope(reader_object *self, PyObject *Py_UNUSED(args))
+{
+    PyObject* new_list;
+
+    fstReaderResetScope(self->ctx);
+
+    new_list = PyList_New(0);
+    if (new_list == NULL)
+        return NULL;
+    Py_SETREF(self->scope_info_list, new_list);
+
+    Py_RETURN_NONE;
+}
+
+static PyObject *
+reader_push_scope(reader_object *self, PyObject *args, PyObject *kwds)
+{
+    static char* kwlist[]  = { "name", "info", NULL };
+    const  char* name;
+    PyObject*    info      = Py_None;
+    void*        user_info = NULL;
+    const char*  result;
+
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "s|O", kwlist, &name, &info))
+        return NULL;
+
+    if (PyList_Append(self->scope_info_list, info) < 0) {
+        return NULL;
+    }
+
+    user_info = (info != Py_None) ? (void *)info : NULL;
+
+    result = fstReaderPushScope(self->ctx, name, user_info);
+
+    if (result == NULL)
+        Py_RETURN_NONE;
+
+    return PyUnicode_FromString(result);
+}
+
+static PyObject*
+reader_pop_scope(reader_object *self, PyObject *Py_UNUSED(args))
+{
+    const char*  result;
+    Py_ssize_t   info_list_size;
+
+    result = fstReaderPopScope(self->ctx);
+
+    if (result == NULL)
+        Py_RETURN_NONE;
+
+    info_list_size = PyList_GET_SIZE(self->scope_info_list);
+
+    if (info_list_size > 0) {
+        PySequence_DelItem(self->scope_info_list, info_list_size-1);
+    }
+        
+    return PyUnicode_FromString(result);
+}
+
+static PyObject*
+reader_get_current_flat_scope(reader_object *self, PyObject *Py_UNUSED(args))
+{
+    const char* result = fstReaderGetCurrentFlatScope(self->ctx);
+    if (result == NULL)
+        Py_RETURN_NONE;
+    return PyUnicode_FromString(result);
+}
+
+static PyObject*
+reader_get_current_scope_user_info(reader_object *self, PyObject *Py_UNUSED(args))
+{
+    void*      user_info;
+    Py_ssize_t info_list_size;
+    PyObject*  info;
+
+    user_info = fstReaderGetCurrentScopeUserInfo(self->ctx);
+
+    if (user_info == NULL)
+        Py_RETURN_NONE;
+    
+    info_list_size = PyList_GET_SIZE(self->scope_info_list);
+    if (info_list_size == 0) {
+        PyErr_SetString(PyExc_RuntimeError, "scope info stack is empty.");
+        return NULL;
+    }
+
+    info = PyList_GET_ITEM(self->scope_info_list, info_list_size-1);
+    if ((void*)info != user_info) {
+        PyErr_SetString(PyExc_RuntimeError, "scope info stack mismatch.");
+        return NULL;
+    }
+    
+    return Py_NewRef(info);
+}
+
+static PyObject*
+reader_get_scope_len(reader_object *self, PyObject *Py_UNUSED(args))
+{
+    int result = fstReaderGetCurrentScopeLen(self->ctx);
+    return PyLong_FromLong(result);
 }
 
 typedef struct {
@@ -332,6 +462,103 @@ reader_get_facility_process_mask(reader_object *self, PyObject *args, PyObject *
     return PyBool_FromLong(mask);
 }
 
+static PyObject*
+reader_get_dump_activity_change_time(reader_object *self, PyObject *args, PyObject *kwds)
+{
+    static char*       kwlist[] = { "index", NULL };
+    unsigned int       index;
+    int                time;
+
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "I", kwlist, &index))
+        return NULL;
+
+    time = fstReaderGetDumpActivityChangeTime(self->ctx, (uint32_t)index);
+
+    return PyLong_FromUnsignedLongLong(time);
+}
+
+static PyObject*
+reader_get_dump_activity_change_value(reader_object *self, PyObject *args, PyObject *kwds)
+{
+    static char*       kwlist[] = { "index", NULL };
+    unsigned int       index;
+    unsigned char      value;
+
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "I", kwlist, &index))
+        return NULL;
+
+    value = fstReaderGetDumpActivityChangeValue(self->ctx, (uint32_t)index);
+
+    return PyLong_FromUnsignedLong((unsigned long)value);
+}
+
+static PyObject*
+reader_set_limit_time_range(reader_object *self, PyObject *args, PyObject *kwds)
+{
+    static char*       kwlist[] = { "start_time", "end_time", NULL };
+    unsigned long long start_time;
+    unsigned long long end_time;
+
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "KK", kwlist, &start_time, &end_time))
+        return NULL;
+
+    fstReaderSetLimitTimeRange(self->ctx, (uint64_t)start_time, (uint64_t)end_time);
+
+    Py_RETURN_NONE;
+}
+
+static PyObject*
+reader_set_unlimited_time_range(reader_object *self, PyObject* Py_UNUSED(args))
+{
+    fstReaderSetUnlimitedTimeRange(self->ctx);
+    Py_RETURN_NONE;
+}
+
+static PyObject*
+reader_set_vcd_extensions(reader_object *self, PyObject *args, PyObject *kwds)
+{
+    static char*       kwlist[] = { "enable", NULL };
+    int                enable;
+
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "p", kwlist, &enable))
+        return NULL;
+
+    fstReaderSetVcdExtensions(self->ctx, enable);
+
+    Py_RETURN_NONE;
+}
+
+static PyObject*
+reader_process_hierarchy(reader_object *self, PyObject *args, PyObject *kwds)
+{
+    static char* kwlist[] = { "filename", NULL };
+    const  char* filename = NULL;
+    FILE*        fv       = NULL;
+    int          rc;
+    
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "|z", kwlist, &filename))
+        return NULL;
+
+    if (filename != NULL) {
+        fv = fopen(filename, "w");
+        if (fv == NULL) {
+            return PyErr_SetFromErrnoWithFilename(PyExc_OSError, filename);
+        }
+    }
+
+    rc = fstReaderProcessHier(self->ctx, fv);
+
+    if (fv != NULL)
+        fclose(fv);
+
+    if (!rc) {
+        PyErr_SetString(PyExc_RuntimeError, "fstReaderProcessHier() failed");
+        return NULL;
+    }
+    
+    Py_RETURN_NONE;
+}
+
 #define DEFINE_READER_PROPERTY_UINT64_GETTER(name, fst_func)        \
 static PyObject*                                                    \
 reader_get_ ## name(reader_object* self, PyObject* Py_UNUSED(args)) \
@@ -402,6 +629,67 @@ static PyGetSetDef  reader_getset[] = {
 };
 
 static PyMethodDef  reader_methods[] = {
+    {   "reset_scope",
+        (PyCFunction)reader_reset_scope,
+        METH_NOARGS,
+        PyDoc_STR(
+            "Reset the current scope hierarchy.\n"
+            "\n"
+            "Clears the current scope stack and associated user information."
+        )
+    },
+    {   "push_scope",
+        (PyCFunction)reader_push_scope,
+        METH_VARARGS | METH_KEYWORDS,
+        PyDoc_STR(
+            "Push a new scope.\n"
+            "\n"
+            "Args:\n"
+            "  name (str): Scope name.\n"
+            "  info (object, optional): User information associated with the scope.\n"
+        )
+    },
+    {   "pop_scope",
+        (PyCFunction)reader_pop_scope,
+        METH_NOARGS,
+        PyDoc_STR(
+            "Pop the current scope.\n"
+            "\n"
+            "Returns:\n"
+            "  str: Current flat scope name after popping.\n"
+        )
+    },
+    {   "get_current_flat_scope",
+        (PyCFunction)reader_get_current_flat_scope,
+        METH_NOARGS,
+        PyDoc_STR(
+            "Get the current flat scope name.\n"
+            "\n"
+            "Returns:\n"
+            "  str: Current hierarchical scope name.\n"
+        )
+    },
+    {   "get_current_scope_user_info",
+        (PyCFunction)reader_get_current_scope_user_info,
+        METH_NOARGS,
+        PyDoc_STR(
+            "Get the user information of the current scope.\n"
+            "\n"
+            "Returns:\n"
+            "  object: User information associated with the current scope.\n"
+            "  None: If no user information is available.\n"
+        )
+    },
+    {   "get_scope_len",
+        (PyCFunction)reader_get_scope_len,
+        METH_NOARGS,
+        PyDoc_STR(
+            "Get the current scope depth.\n"
+            "\n"
+            "Returns:\n"
+            "  int: Number of nested scopes.\n"
+        )
+    },
     {   "set_facility_process_mask",
         (PyCFunction)reader_set_facility_process_mask,
         METH_VARARGS | METH_KEYWORDS,
@@ -451,6 +739,68 @@ static PyMethodDef  reader_methods[] = {
             "\n"
             "Return True if value-change processing is enabled for the specified facility."
        )
+    },
+    {   "get_dump_activity_change_time",
+        (PyCFunction)reader_get_dump_activity_change_time,
+        METH_VARARGS | METH_KEYWORDS,
+        PyDoc_STR(
+            "get_dump_activity_change_time(index)\n"
+            "--\n"
+            "\n"
+            "Return the time of the specified dump activity change entry."
+        )
+    },
+    {   "get_dump_activity_change_value",
+        (PyCFunction)reader_get_dump_activity_change_value,
+        METH_VARARGS | METH_KEYWORDS,
+        PyDoc_STR(
+            "get_dump_activity_change_value(index)\n"
+            "--\n"
+            "\n"
+            "Return the value of the specified dump activity change entry."
+        )
+    },
+    {   "set_limit_time_range",
+        (PyCFunction)reader_set_limit_time_range,
+        METH_VARARGS | METH_KEYWORDS,
+        PyDoc_STR(
+            "set_limit_time_range(start_time, end_time)\n"
+            "--\n"
+            "\n"
+            "Limit processing to the specified time range."
+        )
+    },
+    {   "set_unlimited_time_range",
+        (PyCFunction)reader_set_unlimited_time_range,
+        METH_VARARGS,
+        PyDoc_STR(
+            "set_unlimited_time_range()\n"
+            "--\n"
+            "\n"
+            "Clear the time range limit and process all value changes."
+        )
+    },
+    {   "set_vcd_extensions",
+        (PyCFunction)reader_set_vcd_extensions,
+        METH_VARARGS | METH_KEYWORDS,
+        PyDoc_STR(
+            "set_vcd_extensions(enable)\n"
+            "--\n"
+            "\n"
+            "Enable or disable VCD extensions."
+        )
+    },
+    {   "process_hierarchy",
+        (PyCFunction)reader_process_hierarchy,
+        METH_VARARGS | METH_KEYWORDS,
+        PyDoc_STR(
+            "process_hierarchy(filename=None)\n"
+            "--\n"
+            "\n"
+            "Process the hierarchy. If filename is specified, write the\n"
+            "processed hierarchy to the file; otherwise, process it without\n"
+            "creating an output file."
+        )
     },
     {   "hiers",
         (PyCFunction)reader_hiers,
@@ -543,13 +893,10 @@ PYINIT_FUNC(MODULE_NAME) {
         return NULL;
     }
 
-    if (hier_module == NULL) {
-        hier_module = PyImport_ImportModule(PACKAGE_NAME_STRING ".hier");
-        if (hier_module == NULL) {
-            Py_DECREF(&reader_type);
-            Py_DECREF(m);
-            return NULL;
-        }
+    if (import_hier_module() < 0) {
+        Py_DECREF(&reader_type);
+        Py_DECREF(m);
+        return NULL;
     }
 
     return m;
