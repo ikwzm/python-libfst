@@ -3611,6 +3611,11 @@ int64_t fstReaderGetTimezero(fstReaderContext *xc)
     return (xc ? xc->timezero : 0);
 }
 
+uint32_t fstReaderGetLongestSignalValueLen(fstReaderContext *xc)
+{
+    return (xc ? xc->longest_signal_value_len : 0);
+}
+
 uint32_t fstReaderGetNumberDumpActivityChanges(fstReaderContext *xc)
 {
     return (xc ? xc->num_blackouts : 0);

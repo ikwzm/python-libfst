@@ -531,6 +531,7 @@ void fstReaderSetFacProcessMaskAll(fstReaderContext *ctx);
 void fstReaderSetLimitTimeRange(fstReaderContext *ctx, uint64_t start_time, uint64_t end_time);
 void fstReaderSetUnlimitedTimeRange(fstReaderContext *ctx);
 void fstReaderSetVcdExtensions(fstReaderContext *ctx, int enable);
+uint32_t fstReaderGetLongestSignalValueLen(fstReaderContext *ctx);
 
 /*
  * utility functions
