@@ -46,7 +46,7 @@
 #define OBJECT_NAME         Reader
 #endif
 
-#define MODULE_VERSION      "0.0.4"
+#define MODULE_VERSION      "0.0.5"
 #define MODULE_AUTHOR       "Ichiro Kawazome"
 #define MODULE_AUTHOR_EMAIL "ichiro_k@ca2-so-net.ne.jp"
 #define MODULE_LICENSE      "BSD 2-Clause"
@@ -85,6 +85,8 @@ typedef struct {
     PyObject_HEAD
     fstReaderContext* ctx;
     PyObject*         scope_info_list;
+    char*             temp_signal_value_buf;
+    Py_ssize_t        temp_signal_value_len;
 } reader_object;
 
 static PyObject*
@@ -98,6 +100,26 @@ reader_object_new(PyTypeObject* type, PyObject* args, PyObject* kwdict)
     return (PyObject*)self;
 }
 
+static void
+reader_object_clean(reader_object* self)
+{
+    if (self == NULL)
+        return;
+
+    if (self->ctx != NULL) {
+        fstReaderClose(self->ctx);
+        self->ctx = NULL;
+    }
+
+    Py_CLEAR(self->scope_info_list);
+    
+    if (self->temp_signal_value_buf != NULL) {
+        PyMem_Free(self->temp_signal_value_buf);
+        self->temp_signal_value_buf = NULL;
+    }
+    self->temp_signal_value_len = 0;
+}
+    
 static int
 reader_object_init(reader_object* self, PyObject* args, PyObject* kwdict)
 {
@@ -108,10 +130,7 @@ reader_object_init(reader_object* self, PyObject* args, PyObject* kwdict)
         return -1;
     }
 
-    if (self->ctx != NULL) {
-        fstReaderClose(self->ctx);
-        self->ctx = NULL;
-    }
+    reader_object_clean(self);
 
     self->ctx = fstReaderOpen(filename);
     if (self->ctx == NULL) {
@@ -122,6 +141,9 @@ reader_object_init(reader_object* self, PyObject* args, PyObject* kwdict)
     }
 
     self->scope_info_list = PyList_New(0);
+
+    self->temp_signal_value_len = 0;
+    self->temp_signal_value_buf = NULL;
     
     return 0;
 }
@@ -129,14 +151,20 @@ reader_object_init(reader_object* self, PyObject* args, PyObject* kwdict)
 static void
 reader_object_dealloc(reader_object* self)
 {
-    if (self->ctx != NULL) {
-        fstReaderClose(self->ctx);
-        self->ctx = NULL;
-        Py_CLEAR(self->scope_info_list);
-    }
+    reader_object_clean(self);
     Py_TYPE(self)->tp_free((PyObject*)self);
 }
 
+PyDoc_STRVAR(reader_close_doc,
+    "close()\n"
+    "--\n"
+    "\n"
+    "Close the FST reader.\n"
+    "\n"
+    "Release all resources associated with this reader.\n"
+    "After this call, the reader is closed and its scope information\n"
+    "is discarded. Calling this method more than once is safe."
+);
 static PyObject*
 reader_close(reader_object* self, PyObject* Py_UNUSED(args))
 {
@@ -189,9 +217,32 @@ static PyTypeObject reader_hier_iterator_type = {
     .tp_iternext   = (iternextfunc)reader_hier_iterator_next,
     .tp_doc        = "FST hierarchy iterator",
 };
-    
+
+PyDoc_STRVAR(reader_hiers_doc,
+    "hiers()\n"
+    "--\n"
+    "\n"
+    "Return an iterator over the FST hierarchy.\n"
+    "\n"
+    "The hierarchy iteration is restarted from the beginning each time\n"
+    "this method is called.\n"
+    "\n"
+    "Yields:\n"
+    "    Scope:\n"
+    "        Scope entry.\n"
+    "    UpScope:\n"
+    "        End of the current scope.\n"
+    "    Var:\n"
+    "        Variable declaration.\n"
+    "    Attr:\n"
+    "        Attribute entry.\n"
+    "    AttrEnd:\n"
+    "        End of an attribute block.\n"
+    "    None:\n"
+    "        An unsupported hierarchy entry."
+);    
 static PyObject*
-reader_hiers(reader_object *self, PyObject *Py_UNUSED(args))
+reader_hiers(reader_object* self, PyObject* Py_UNUSED(args))
 {
     reader_hier_iterator* iter = PyObject_New(reader_hier_iterator, &reader_hier_iterator_type);
     if (iter == NULL)
@@ -204,8 +255,17 @@ reader_hiers(reader_object *self, PyObject *Py_UNUSED(args))
     return (PyObject*)iter;
 }
 
+PyDoc_STRVAR(reader_reset_scope_doc,
+    "reset_scope()\n"
+    "--\n"
+    "\n"
+    "Clear the current FST hierarchy scope stack.\n"
+    "\n"
+    "This method removes all scopes added by push_scope() and\n"
+    "discards their associated user information."
+);
 static PyObject*
-reader_reset_scope(reader_object *self, PyObject *Py_UNUSED(args))
+reader_reset_scope(reader_object* self, PyObject* Py_UNUSED(args))
 {
     PyObject* new_list;
 
@@ -219,8 +279,24 @@ reader_reset_scope(reader_object *self, PyObject *Py_UNUSED(args))
     Py_RETURN_NONE;
 }
 
+PyDoc_STRVAR(reader_push_scope_doc,
+    "push_scope(name, info=None)\n"
+    "--\n"
+    "\n"
+    "Add a scope to the current FST hierarchy stack.\n"
+    "\n"
+    "The optional info object is stored with the scope and can be\n"
+    "retrieved by get_current_scope_user_info().\n"
+    "\n"
+    "Args:\n"
+    "    name (str): Scope name.\n"
+    "    info (object, optional): User-defined scope information.\n"
+    "\n"
+    "Returns:\n"
+    "    str: Current flattened scope path."
+);
 static PyObject *
-reader_push_scope(reader_object *self, PyObject *args, PyObject *kwds)
+reader_push_scope(reader_object* self, PyObject* args, PyObject* kwds)
 {
     static char* kwlist[]  = { "name", "info", NULL };
     const  char* name;
@@ -245,8 +321,20 @@ reader_push_scope(reader_object *self, PyObject *args, PyObject *kwds)
     return PyUnicode_FromString(result);
 }
 
+PyDoc_STRVAR(reader_pop_scope_doc,
+    "pop_scope()\n"
+    "--\n"
+    "\n"
+    "Remove the current scope from the FST hierarchy stack.\n"
+    "\n"
+    "This method reverses the operation of push_scope().\n"
+    "The user information associated with the scope is discarded.\n"
+    "\n"
+    "Returns:\n"
+    "    str: Current flattened scope path."
+);
 static PyObject*
-reader_pop_scope(reader_object *self, PyObject *Py_UNUSED(args))
+reader_pop_scope(reader_object* self, PyObject* Py_UNUSED(args))
 {
     const char*  result;
     Py_ssize_t   info_list_size;
@@ -265,8 +353,19 @@ reader_pop_scope(reader_object *self, PyObject *Py_UNUSED(args))
     return PyUnicode_FromString(result);
 }
 
+PyDoc_STRVAR(reader_get_current_flat_scope_doc,
+    "get_current_flat_scope()\n"
+    "--\n"
+    "\n"
+    "Return the current FST hierarchy scope as a flat name.\n"
+    "\n"
+    "The scope components are concatenated into a single path string.\n"
+    "\n"
+    "Returns:\n"
+    "    str | None: Flattened hierarchy name, or None if unavailable."
+);
 static PyObject*
-reader_get_current_flat_scope(reader_object *self, PyObject *Py_UNUSED(args))
+reader_get_current_flat_scope(reader_object* self, PyObject* Py_UNUSED(args))
 {
     const char* result = fstReaderGetCurrentFlatScope(self->ctx);
     if (result == NULL)
@@ -274,8 +373,20 @@ reader_get_current_flat_scope(reader_object *self, PyObject *Py_UNUSED(args))
     return PyUnicode_FromString(result);
 }
 
+PyDoc_STRVAR(reader_get_current_scope_user_info_doc,
+    "get_current_scope_user_info()\n"
+    "--\n"
+    "\n"
+    "Return the user information stored for the current scope.\n"
+    "\n"
+    "The information object is the same object passed as the info\n"
+    "argument to push_scope().\n"
+    "\n"
+    "Returns:\n"
+    "    object | None: Scope user information, or None if not set."
+);
 static PyObject*
-reader_get_current_scope_user_info(reader_object *self, PyObject *Py_UNUSED(args))
+reader_get_current_scope_user_info(reader_object* self, PyObject* Py_UNUSED(args))
 {
     void*      user_info;
     Py_ssize_t info_list_size;
@@ -301,8 +412,17 @@ reader_get_current_scope_user_info(reader_object *self, PyObject *Py_UNUSED(args
     return Py_NewRef(info);
 }
 
+PyDoc_STRVAR(reader_get_scope_len_doc,
+    "get_scope_len()\n"
+    "--\n"
+    "\n"
+    "Return the length of the current FST hierarchy scope.\n"
+    "\n"
+    "Returns:\n"
+    "    int: Number of characters in the current scope name."
+);
 static PyObject*
-reader_get_scope_len(reader_object *self, PyObject *Py_UNUSED(args))
+reader_get_scope_len(reader_object* self, PyObject* Py_UNUSED(args))
 {
     int result = fstReaderGetCurrentScopeLen(self->ctx);
     return PyLong_FromLong(result);
@@ -384,8 +504,22 @@ static PyTypeObject reader_block_iterator_type = {
     .tp_doc        = "FST block iterator",
 };
 
+PyDoc_STRVAR(reader_blocks_doc,
+    "blocks()\n"
+    "--\n"
+    "\n"
+    "Return an iterator over value changes.\n"
+    "\n"
+    "Each iteration yields a tuple:\n"
+    "    (time, handle, value)\n"
+    "\n"
+    "where:\n"
+    "    time   (int): Simulation time.\n"
+    "    handle (int): Facility handle.\n"
+    "    value  (str): Signal value."
+);
 static PyObject*
-reader_blocks(reader_object *self, PyObject *Py_UNUSED(args))
+reader_blocks(reader_object* self, PyObject* Py_UNUSED(args))
 {
     reader_block_iterator* iter = PyObject_New(reader_block_iterator, &reader_block_iterator_type);
 
@@ -405,8 +539,17 @@ reader_blocks(reader_object *self, PyObject *Py_UNUSED(args))
     return (PyObject*)iter;
 }
 
+PyDoc_STRVAR(reader_clear_facility_process_mask_doc,
+    "clear_facility_process_mask(handle)\n"
+    "--\n"
+    "\n"
+    "Disable value change processing for a facility.\n"
+    "\n"
+    "Args:\n"
+    "    handle (int): Facility handle to disable."
+);
 static PyObject*
-reader_clear_facility_process_mask(reader_object *self, PyObject *args, PyObject *kwds)
+reader_clear_facility_process_mask(reader_object* self, PyObject* args, PyObject* kwds)
 {
     static char*       kwlist[] = { "handle", NULL };
     unsigned long long handle;
@@ -419,15 +562,33 @@ reader_clear_facility_process_mask(reader_object *self, PyObject *args, PyObject
     Py_RETURN_NONE;
 }
 
+PyDoc_STRVAR(reader_clear_facility_process_mask_all_doc,
+    "clear_facility_process_mask_all()\n"
+    "--\n"
+    "\n"
+    "Disable value change processing for all facilities.\n"
+    "\n"
+    "After calling this method, value changes from all facilities are\n"
+    "ignored by the reader."
+);
 static PyObject*
-reader_clear_facility_process_mask_all(reader_object *self, PyObject* Py_UNUSED(args))
+reader_clear_facility_process_mask_all(reader_object* self, PyObject* Py_UNUSED(args))
 {
     fstReaderClrFacProcessMaskAll(self->ctx);
     Py_RETURN_NONE;
 }
 
+PyDoc_STRVAR(reader_set_facility_process_mask_doc,
+    "set_facility_process_mask(handle)\n"
+    "--\n"
+    "\n"
+    "Enable value change processing for a facility.\n"
+    "\n"
+    "Args:\n"
+    "    handle (int): Facility handle to enable."
+);
 static PyObject*
-reader_set_facility_process_mask(reader_object *self, PyObject *args, PyObject *kwds)
+reader_set_facility_process_mask(reader_object* self, PyObject* args, PyObject* kwds)
 {
     static char*       kwlist[] = { "handle", NULL };
     unsigned long long handle;
@@ -440,15 +601,36 @@ reader_set_facility_process_mask(reader_object *self, PyObject *args, PyObject *
     Py_RETURN_NONE;
 }
 
+PyDoc_STRVAR(reader_set_facility_process_mask_all_doc,
+    "set_facility_process_mask_all()\n"
+    "--\n"
+    "\n"
+    "Enable value change processing for all facilities.\n"
+    "\n"
+    "After calling this method, value changes from all facilities are\n"
+    "processed by the reader."
+);
 static PyObject*
-reader_set_facility_process_mask_all(reader_object *self, PyObject* Py_UNUSED(args))
+reader_set_facility_process_mask_all(reader_object* self, PyObject* Py_UNUSED(args))
 {
     fstReaderSetFacProcessMaskAll(self->ctx);
     Py_RETURN_NONE;
 }
 
+PyDoc_STRVAR(reader_get_facility_process_mask_doc,
+    "get_facility_process_mask(handle)\n"
+    "--\n"
+    "\n"
+    "Check whether a facility is enabled for value change processing.\n"
+    "\n"
+    "Args:\n"
+    "    handle (int): Facility handle.\n"
+    "\n"
+    "Returns:\n"
+    "    bool: True if the facility is enabled, otherwise False."
+);
 static PyObject*
-reader_get_facility_process_mask(reader_object *self, PyObject *args, PyObject *kwds)
+reader_get_facility_process_mask(reader_object* self, PyObject* args, PyObject* kwds)
 {
     static char*       kwlist[] = { "handle", NULL };
     unsigned long long handle;
@@ -462,8 +644,20 @@ reader_get_facility_process_mask(reader_object *self, PyObject *args, PyObject *
     return PyBool_FromLong(mask);
 }
 
+PyDoc_STRVAR(reader_get_dump_activity_change_time_doc,
+    "get_dump_activity_change_time(index)\n"
+    "--\n"
+    "\n"
+    "Return the simulation time associated with a dump activity change.\n"
+    "\n"
+    "Args:\n"
+    "    index (int): Zero-based index of the activity change entry.\n"
+    "\n"
+    "Returns:\n"
+    "    int: Simulation timestamp."
+);
 static PyObject*
-reader_get_dump_activity_change_time(reader_object *self, PyObject *args, PyObject *kwds)
+reader_get_dump_activity_change_time(reader_object* self, PyObject* args, PyObject* kwds)
 {
     static char*       kwlist[] = { "index", NULL };
     unsigned int       index;
@@ -477,8 +671,20 @@ reader_get_dump_activity_change_time(reader_object *self, PyObject *args, PyObje
     return PyLong_FromUnsignedLongLong(time);
 }
 
+PyDoc_STRVAR(reader_get_dump_activity_change_value_doc,
+    "get_dump_activity_change_value(index)\n"
+    "--\n"
+    "\n"
+    "Return the value associated with a dump activity change.\n"
+    "\n"
+    "Args:\n"
+    "    index (int): Zero-based index of the activity change entry.\n"
+    "\n"
+    "Returns:\n"
+    "    int: Unsigned 8-bit activity change value."
+);
 static PyObject*
-reader_get_dump_activity_change_value(reader_object *self, PyObject *args, PyObject *kwds)
+reader_get_dump_activity_change_value(reader_object* self, PyObject* args, PyObject* kwds)
 {
     static char*       kwlist[] = { "index", NULL };
     unsigned int       index;
@@ -492,8 +698,20 @@ reader_get_dump_activity_change_value(reader_object *self, PyObject *args, PyObj
     return PyLong_FromUnsignedLong((unsigned long)value);
 }
 
+PyDoc_STRVAR(reader_set_limit_time_range_doc,
+    "set_limit_time_range(start_time, end_time)\n"
+    "--\n"
+    "\n"
+    "Set the time range limit for FST reading.\n"
+    "\n"
+    "Args:\n"
+    "    start_time (int): First simulation timestamp to include.\n"
+    "    end_time   (int): Last simulation timestamp to include.\n"
+    "\n"
+    "Use set_unlimited_time_range() to remove the time range limit."
+);
 static PyObject*
-reader_set_limit_time_range(reader_object *self, PyObject *args, PyObject *kwds)
+reader_set_limit_time_range(reader_object* self, PyObject* args, PyObject* kwds)
 {
     static char*       kwlist[] = { "start_time", "end_time", NULL };
     unsigned long long start_time;
@@ -507,15 +725,32 @@ reader_set_limit_time_range(reader_object *self, PyObject *args, PyObject *kwds)
     Py_RETURN_NONE;
 }
 
+PyDoc_STRVAR(reader_set_unlimited_time_range_doc,
+    "set_unlimited_time_range()\n"
+    "--\n"
+    "\n"
+    "Clear the time range limit set by set_limit_time_range().\n"
+    "\n"
+    "After calling this method, the entire simulation time range is processed."
+);
 static PyObject*
-reader_set_unlimited_time_range(reader_object *self, PyObject* Py_UNUSED(args))
+reader_set_unlimited_time_range(reader_object* self, PyObject* Py_UNUSED(args))
 {
     fstReaderSetUnlimitedTimeRange(self->ctx);
     Py_RETURN_NONE;
 }
 
+PyDoc_STRVAR(reader_set_vcd_extensions_doc,
+    "set_vcd_extensions(enable)\n"
+    "--\n"
+    "\n"
+    "Enable or disable VCD extensions.\n"
+    "\n"
+    "Args:\n"
+    "    enable (bool): True to enable VCD extensions, False to disable them."
+);
 static PyObject*
-reader_set_vcd_extensions(reader_object *self, PyObject *args, PyObject *kwds)
+reader_set_vcd_extensions(reader_object* self, PyObject* args, PyObject* kwds)
 {
     static char*       kwlist[] = { "enable", NULL };
     int                enable;
@@ -528,8 +763,25 @@ reader_set_vcd_extensions(reader_object *self, PyObject *args, PyObject *kwds)
     Py_RETURN_NONE;
 }
 
+PyDoc_STRVAR(reader_process_hierarchy_doc,
+    "process_hierarchy(filename=None)\n"
+    "--\n"
+    "\n"
+    "Process the FST hierarchy.\n"
+    "\n"
+    "If *filename* is specified, the hierarchy is written to the given\n"
+    "file while being processed. If omitted or None, the hierarchy is\n"
+    "processed without generating an output file.\n"
+    "\n"
+    "Args:\n"
+    "    filename (str | None, optional): Output file name.\n"
+    "\n"
+    "Raises:\n"
+    "    OSError: If the output file cannot be opened.\n"
+    "    RuntimeError: If hierarchy processing fails."
+);
 static PyObject*
-reader_process_hierarchy(reader_object *self, PyObject *args, PyObject *kwds)
+reader_process_hierarchy(reader_object* self, PyObject* args, PyObject* kwds)
 {
     static char* kwlist[] = { "filename", NULL };
     const  char* filename = NULL;
@@ -559,21 +811,108 @@ reader_process_hierarchy(reader_object *self, PyObject *args, PyObject *kwds)
     Py_RETURN_NONE;
 }
 
-#define DEFINE_READER_PROPERTY_UINT64_GETTER(name, fst_func)        \
+PyDoc_STRVAR(
+    reader_get_value_from_handle_at_time_doc,
+    "Return the signal value at a specified simulation time.\n"
+    "\n"
+    "Args:\n"
+    "    time (int): Simulation timestamp.\n"
+    "    handle (int): Facility handle of the signal.\n"
+    "\n"
+    "Returns:\n"
+    "    str: Signal value at the specified time, or None if unavailable."
+);
+static PyObject*
+reader_get_value_from_handle_at_time(reader_object* self, PyObject* args, PyObject* kwds)
+{
+    static char*       kwlist[] = { "time", "handle", NULL };
+    unsigned long long time;
+    unsigned long long handle;
+    Py_ssize_t         required_len;
+    char*              value;
+
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "KK", kwlist, &time, &handle)) 
+        return NULL;
+
+    required_len = (Py_ssize_t)fstReaderGetLongestSignalValueLen(self->ctx);
+    if (required_len <= 0) {
+        PyErr_SetString(PyExc_RuntimeError , "No signal value length information is available.");
+        return NULL;
+    }
+    if (required_len > PY_SSIZE_T_MAX - 1) {
+        PyErr_SetString(PyExc_OverflowError, "No signal value length is too large.");
+        return NULL;
+    }
+    if (self->temp_signal_value_buf == NULL) {
+        char* new_buf = PyMem_Malloc(required_len+1);
+        if (new_buf == NULL) {
+            return PyErr_NoMemory();
+        }
+        self->temp_signal_value_buf = new_buf;
+        self->temp_signal_value_len = required_len;
+    }
+    if (required_len > self->temp_signal_value_len) {
+        char* new_buf = PyMem_Realloc(self->temp_signal_value_buf, required_len+1);
+        if (new_buf == NULL) {
+            return PyErr_NoMemory();
+        }
+        self->temp_signal_value_buf = new_buf;
+        self->temp_signal_value_len = required_len;
+    }
+
+    value = fstReaderGetValueFromHandleAtTime(
+                self->ctx,
+                (uint64_t)time,
+                (fstHandle)handle,
+                self->temp_signal_value_buf);
+
+    if (value == NULL)
+        Py_RETURN_NONE;
+
+    return PyUnicode_FromString(value);
+}
+
+PyDoc_STRVAR(
+    reader_set_native_doubles_on_callback_doc,
+    "Enable or disable native double values in value change callbacks.\n"
+    "\n"
+    "Args:\n"
+    "    enable (bool): If True, callbacks receive native double values.\n"
+    "                    If False, callbacks receive the default representation."
+);
+static PyObject*
+reader_set_native_doubles_on_callback(reader_object* self, PyObject* args, PyObject* kwds)
+{
+    static char* kwlist[] = { "enable", NULL };
+    int          enable;
+
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "p", kwlist, &enable)) 
+        return NULL;
+
+    fstReaderIterBlocksSetNativeDoublesOnCallback(self->ctx, enable);
+
+    Py_RETURN_NONE;
+}
+
+#define DEFINE_READER_PROPERTY_UINT64_GETTER(name, fst_func, doc)   \
 static PyObject*                                                    \
 reader_get_ ## name(reader_object* self, PyObject* Py_UNUSED(args)) \
 {                                                                   \
     uint64_t property = (uint64_t)fst_func(self->ctx);              \
     return PyLong_FromUnsignedLongLong(property);                   \
-}
-#define DEFINE_READER_PROPERTY_SINT64_GETTER(name, fst_func)        \
+}                                                                   \
+PyDoc_STRVAR(reader_get_ ## name ## _doc, doc);
+
+#define DEFINE_READER_PROPERTY_SINT64_GETTER(name, fst_func, doc)   \
 static PyObject*                                                    \
 reader_get_ ## name(reader_object* self, PyObject* Py_UNUSED(args)) \
 {                                                                   \
     int64_t property = (int64_t)fst_func(self->ctx);                \
     return PyLong_FromLongLong(property);                           \
-}
-#define DEFINE_READER_PROPERTY_STRING_GETTER(name, fst_func)        \
+}                                                                   \
+PyDoc_STRVAR(reader_get_ ## name ## _doc, doc);
+
+#define DEFINE_READER_PROPERTY_STRING_GETTER(name, fst_func, doc)   \
 static PyObject*                                                    \
 reader_get_ ## name(reader_object* self, PyObject* Py_UNUSED(args)) \
 {                                                                   \
@@ -581,259 +920,200 @@ reader_get_ ## name(reader_object* self, PyObject* Py_UNUSED(args)) \
     if (property == NULL)                                           \
         Py_RETURN_NONE;                                             \
     return PyUnicode_FromString(property);                          \
-}
+}                                                                   \
+PyDoc_STRVAR(reader_get_ ## name ## _doc, doc);
 
-#define DEFINE_READER_PROPERTY(name, help) {                        \
-    #name                       ,                                   \
-    (getter)reader_get_ ## name ,                                   \
-    NULL                        ,                                   \
-    help                        ,                                   \
-    NULL                        ,                                   \
-}
 
-DEFINE_READER_PROPERTY_UINT64_GETTER(alias_count               , fstReaderGetAliasCount);
-DEFINE_READER_PROPERTY_SINT64_GETTER(double_endian_match_state , fstReaderGetDoubleEndianMatchState);
-DEFINE_READER_PROPERTY_UINT64_GETTER(end_time                  , fstReaderGetEndTime);
-DEFINE_READER_PROPERTY_SINT64_GETTER(file_type                 , fstReaderGetFileType);
-DEFINE_READER_PROPERTY_SINT64_GETTER(fseek_failed              , fstReaderGetFseekFailed);
-DEFINE_READER_PROPERTY_SINT64_GETTER(max_handle                , fstReaderGetMaxHandle);
-DEFINE_READER_PROPERTY_UINT64_GETTER(memory_used_by_writer     , fstReaderGetMemoryUsedByWriter);
-DEFINE_READER_PROPERTY_UINT64_GETTER(dump_activity_changes     , fstReaderGetNumberDumpActivityChanges);
-DEFINE_READER_PROPERTY_UINT64_GETTER(scope_count               , fstReaderGetScopeCount);
-DEFINE_READER_PROPERTY_UINT64_GETTER(start_time                , fstReaderGetStartTime);
-DEFINE_READER_PROPERTY_SINT64_GETTER(time_scale                , fstReaderGetTimescale);
-DEFINE_READER_PROPERTY_SINT64_GETTER(time_zero                 , fstReaderGetTimezero);
-DEFINE_READER_PROPERTY_UINT64_GETTER(value_change_section_count, fstReaderGetValueChangeSectionCount);
-DEFINE_READER_PROPERTY_UINT64_GETTER(var_count                 , fstReaderGetVarCount);
-DEFINE_READER_PROPERTY_STRING_GETTER(version                   , fstReaderGetVersionString);
-DEFINE_READER_PROPERTY_STRING_GETTER(date                      , fstReaderGetDateString);
+DEFINE_READER_PROPERTY_UINT64_GETTER( 
+    alias_count,
+    fstReaderGetAliasCount,
+    "Number of aliases in the FST file.\n"
+    "\n"
+    "Returns:\n"
+    "    int: Number of alias entries."
+);
+DEFINE_READER_PROPERTY_SINT64_GETTER(
+    double_endian_match_state,
+    fstReaderGetDoubleEndianMatchState,
+    "Return the double endian match state of the FST reader.\n"
+    "\n"
+    "Returns:\n"
+    "    int: Double endian match state."
+);
+DEFINE_READER_PROPERTY_UINT64_GETTER(
+    end_time,
+    fstReaderGetEndTime,
+    "Return the end time of the FST file.\n"
+    "\n"
+    "Returns:\n"
+    "    int: Simulation time at the end of the FST data."
+);
+DEFINE_READER_PROPERTY_SINT64_GETTER(
+    file_type,
+    fstReaderGetFileType,
+    "Return the file type of the FST file.\n"
+    "\n"
+    "Returns:\n"
+    "    int: FST file type identifier."
+);
+DEFINE_READER_PROPERTY_SINT64_GETTER(
+    fseek_failed,
+    fstReaderGetFseekFailed,
+    "Return the fseek failure status of the FST reader.\n"
+    "\n"
+    "Returns:\n"
+    "    int: Non-zero if an fseek operation failed, otherwise zero."
+);
+DEFINE_READER_PROPERTY_SINT64_GETTER(
+    max_handle,
+    fstReaderGetMaxHandle,
+    "Return the maximum facility handle used by the FST reader.\n"
+    "\n"
+    "Returns:\n"
+    "    int: Maximum facility handle value."
+);
+DEFINE_READER_PROPERTY_UINT64_GETTER(
+    memory_used_by_writer,
+    fstReaderGetMemoryUsedByWriter,
+    "Return the amount of memory used by the FST writer.\n"
+    "\n"
+    "Returns:\n"
+    "    int: Memory usage in bytes."
+);
+DEFINE_READER_PROPERTY_UINT64_GETTER(
+    dump_activity_changes,
+    fstReaderGetNumberDumpActivityChanges,
+    "Return the number of dump activity changes available in the FST reader.\n"
+    "\n"
+    "Returns:\n"
+    "    int: Number of dump activity change entries."
+);
+DEFINE_READER_PROPERTY_UINT64_GETTER(
+    scope_count,
+    fstReaderGetScopeCount,
+    "Return the number of scopes in the FST hierarchy.\n"
+    "\n"
+    "Returns:\n"
+    "    int: Number of scope entries."
+);
+DEFINE_READER_PROPERTY_UINT64_GETTER(
+    start_time,
+    fstReaderGetStartTime,
+    "Return the start time of the FST file.\n"
+    "\n"
+    "Returns:\n"
+    "    int: Simulation timestamp at the beginning of the FST data."
+);
+DEFINE_READER_PROPERTY_SINT64_GETTER(
+    time_scale,
+    fstReaderGetTimescale,
+    "Return the time scale of the FST file.\n"
+    "\n"
+    "Returns:\n"
+    "    int: Time scale exponent used for simulation timestamps."
+);
+DEFINE_READER_PROPERTY_SINT64_GETTER(
+    time_zero,
+    fstReaderGetTimezero,
+    "Return the time zero value of the FST file.\n"
+    "\n"
+    "Returns:\n"
+    "    int: Time zero offset for simulation timestamps."
+);
+DEFINE_READER_PROPERTY_UINT64_GETTER(
+    value_change_section_count,
+    fstReaderGetValueChangeSectionCount,
+    "Return the number of value change sections in the FST file.\n"
+    "\n"
+    "Returns:\n"
+    "    int: Number of value change sections."
+);
+DEFINE_READER_PROPERTY_UINT64_GETTER(
+    var_count,
+    fstReaderGetVarCount,
+    "Return the number of variables in the FST hierarchy.\n"
+    "\n"
+    "Returns:\n"
+    "    int: Number of variable definitions."
+);
+DEFINE_READER_PROPERTY_UINT64_GETTER( 
+    longest_signal_value_len,
+    fstReaderGetLongestSignalValueLen,
+    "Return the maximum length of signal values stored in the FST file.\n"
+    "\n"
+    "This value can be used to determine the buffer size required for\n"
+    "reading signal values.\n"
+    "\n"
+    "Returns:\n"
+    "    int: Maximum signal value length."
+);
+DEFINE_READER_PROPERTY_STRING_GETTER(
+    version,
+    fstReaderGetVersionString,
+    "Return the FST version string.\n"
+    "\n"
+    "Returns:\n"
+    "    str: Version information of the FST file."
+);
+DEFINE_READER_PROPERTY_STRING_GETTER(
+    date,
+    fstReaderGetDateString,
+    "Return the FST file date string.\n"
+    "\n"
+    "Returns:\n"
+    "    str: Date information of the FST file."
+);
+
+#define READER_PROPERTY(name) { #name, (getter)reader_get_##name , NULL, reader_get_##name##_doc, NULL}
 
 static PyGetSetDef  reader_getset[] = {
-    DEFINE_READER_PROPERTY(alias_count               , "Number of alases."     ),
-    DEFINE_READER_PROPERTY(double_endian_match_state , ""                      ),
-    DEFINE_READER_PROPERTY(end_time                  , ""                      ),
-    DEFINE_READER_PROPERTY(file_type                 , ""                      ),
-    DEFINE_READER_PROPERTY(fseek_failed              , ""                      ),
-    DEFINE_READER_PROPERTY(max_handle                , "Number of max handles."),
-    DEFINE_READER_PROPERTY(memory_used_by_writer     , ""                      ),
-    DEFINE_READER_PROPERTY(dump_activity_changes     , ""                      ),
-    DEFINE_READER_PROPERTY(scope_count               , ""                      ),
-    DEFINE_READER_PROPERTY(start_time                , ""),
-    DEFINE_READER_PROPERTY(time_scale                , ""),
-    DEFINE_READER_PROPERTY(time_zero                 , ""),
-    DEFINE_READER_PROPERTY(value_change_section_count, "Number of value change sections."),
-    DEFINE_READER_PROPERTY(var_count                 , "Number of variables."  ),
-    DEFINE_READER_PROPERTY(version                   , ""),
-    DEFINE_READER_PROPERTY(date                      , ""),
+    READER_PROPERTY(alias_count               ),
+    READER_PROPERTY(double_endian_match_state ),
+    READER_PROPERTY(end_time                  ),
+    READER_PROPERTY(file_type                 ),
+    READER_PROPERTY(fseek_failed              ),
+    READER_PROPERTY(max_handle                ),
+    READER_PROPERTY(memory_used_by_writer     ),
+    READER_PROPERTY(dump_activity_changes     ),
+    READER_PROPERTY(scope_count               ),
+    READER_PROPERTY(start_time                ),
+    READER_PROPERTY(time_scale                ),
+    READER_PROPERTY(time_zero                 ),
+    READER_PROPERTY(value_change_section_count),
+    READER_PROPERTY(var_count                 ),
+    READER_PROPERTY(longest_signal_value_len  ),
+    READER_PROPERTY(version                   ),
+    READER_PROPERTY(date                      ),
     {NULL}
 };
 
+#define READER_METHOD(name, flags) { #name, (PyCFunction)reader_##name, flags, reader_##name##_doc }
+#define READER_METHOD_NOARGS(name) READER_METHOD(name, METH_NOARGS)
+#define READER_METHOD_KVARGS(name) READER_METHOD(name, METH_VARARGS | METH_KEYWORDS)
+
 static PyMethodDef  reader_methods[] = {
-    {   "reset_scope",
-        (PyCFunction)reader_reset_scope,
-        METH_NOARGS,
-        PyDoc_STR(
-            "Reset the current scope hierarchy.\n"
-            "\n"
-            "Clears the current scope stack and associated user information."
-        )
-    },
-    {   "push_scope",
-        (PyCFunction)reader_push_scope,
-        METH_VARARGS | METH_KEYWORDS,
-        PyDoc_STR(
-            "Push a new scope.\n"
-            "\n"
-            "Args:\n"
-            "  name (str): Scope name.\n"
-            "  info (object, optional): User information associated with the scope.\n"
-        )
-    },
-    {   "pop_scope",
-        (PyCFunction)reader_pop_scope,
-        METH_NOARGS,
-        PyDoc_STR(
-            "Pop the current scope.\n"
-            "\n"
-            "Returns:\n"
-            "  str: Current flat scope name after popping.\n"
-        )
-    },
-    {   "get_current_flat_scope",
-        (PyCFunction)reader_get_current_flat_scope,
-        METH_NOARGS,
-        PyDoc_STR(
-            "Get the current flat scope name.\n"
-            "\n"
-            "Returns:\n"
-            "  str: Current hierarchical scope name.\n"
-        )
-    },
-    {   "get_current_scope_user_info",
-        (PyCFunction)reader_get_current_scope_user_info,
-        METH_NOARGS,
-        PyDoc_STR(
-            "Get the user information of the current scope.\n"
-            "\n"
-            "Returns:\n"
-            "  object: User information associated with the current scope.\n"
-            "  None: If no user information is available.\n"
-        )
-    },
-    {   "get_scope_len",
-        (PyCFunction)reader_get_scope_len,
-        METH_NOARGS,
-        PyDoc_STR(
-            "Get the current scope depth.\n"
-            "\n"
-            "Returns:\n"
-            "  int: Number of nested scopes.\n"
-        )
-    },
-    {   "set_facility_process_mask",
-        (PyCFunction)reader_set_facility_process_mask,
-        METH_VARARGS | METH_KEYWORDS,
-        PyDoc_STR(
-           "set_facility_process_mask(handle)\n"
-           "--\n"
-           "\n"
-           "Enable value-change processing for the specified facility handle."
-        )
-    },
-    {   "set_facility_process_mask_all",
-        (PyCFunction)reader_set_facility_process_mask_all,
-        METH_VARARGS,
-        PyDoc_STR(
-            "set_facility_process_mask_all()\n"
-            "--\n"
-            "\n"
-            "Enable value-change processing for all facilities."
-        )
-    },
-    {   "clear_facility_process_mask",
-        (PyCFunction)reader_clear_facility_process_mask,
-        METH_VARARGS | METH_KEYWORDS,
-        PyDoc_STR(
-            "clear_facility_process_mask(handle)\n"
-            "--\n"
-            "\n"
-            "Disable value-change processing for the specified facility handle."
-        )
-    },
-    {   "clear_facility_process_mask_all",
-        (PyCFunction)reader_clear_facility_process_mask_all,
-        METH_VARARGS,
-        PyDoc_STR(
-            "clear_facility_process_mask_all()\n"
-            "--\n"
-            "\n"
-            "Disable value-change processing for all facilities."
-        )
-    },
-    {   "get_facility_process_mask",
-        (PyCFunction)reader_get_facility_process_mask,
-        METH_VARARGS | METH_KEYWORDS,
-        PyDoc_STR(
-            "get_facility_process_mask(handle)\n"
-            "--\n"
-            "\n"
-            "Return True if value-change processing is enabled for the specified facility."
-       )
-    },
-    {   "get_dump_activity_change_time",
-        (PyCFunction)reader_get_dump_activity_change_time,
-        METH_VARARGS | METH_KEYWORDS,
-        PyDoc_STR(
-            "get_dump_activity_change_time(index)\n"
-            "--\n"
-            "\n"
-            "Return the time of the specified dump activity change entry."
-        )
-    },
-    {   "get_dump_activity_change_value",
-        (PyCFunction)reader_get_dump_activity_change_value,
-        METH_VARARGS | METH_KEYWORDS,
-        PyDoc_STR(
-            "get_dump_activity_change_value(index)\n"
-            "--\n"
-            "\n"
-            "Return the value of the specified dump activity change entry."
-        )
-    },
-    {   "set_limit_time_range",
-        (PyCFunction)reader_set_limit_time_range,
-        METH_VARARGS | METH_KEYWORDS,
-        PyDoc_STR(
-            "set_limit_time_range(start_time, end_time)\n"
-            "--\n"
-            "\n"
-            "Limit processing to the specified time range."
-        )
-    },
-    {   "set_unlimited_time_range",
-        (PyCFunction)reader_set_unlimited_time_range,
-        METH_VARARGS,
-        PyDoc_STR(
-            "set_unlimited_time_range()\n"
-            "--\n"
-            "\n"
-            "Clear the time range limit and process all value changes."
-        )
-    },
-    {   "set_vcd_extensions",
-        (PyCFunction)reader_set_vcd_extensions,
-        METH_VARARGS | METH_KEYWORDS,
-        PyDoc_STR(
-            "set_vcd_extensions(enable)\n"
-            "--\n"
-            "\n"
-            "Enable or disable VCD extensions."
-        )
-    },
-    {   "process_hierarchy",
-        (PyCFunction)reader_process_hierarchy,
-        METH_VARARGS | METH_KEYWORDS,
-        PyDoc_STR(
-            "process_hierarchy(filename=None)\n"
-            "--\n"
-            "\n"
-            "Process the hierarchy. If filename is specified, write the\n"
-            "processed hierarchy to the file; otherwise, process it without\n"
-            "creating an output file."
-        )
-    },
-    {   "hiers",
-        (PyCFunction)reader_hiers,
-        METH_NOARGS,
-        PyDoc_STR(
-            "hiers()\n"
-            "--\n"
-            "\n"
-            "Return an iterator over FST hierarchy objects."
-        )
-    },
-    {   "blocks",
-        (PyCFunction)reader_blocks,
-        METH_NOARGS,
-        PyDoc_STR(
-          "blocks()\n"
-          "--\n"
-          "\n"
-          "Return an iterator over FST value changes.\n"
-          "Each item is returned as a tuple:\n"
-          "    (time, facidx, value)\n"
-        )
-    },
-    {   "close",
-        (PyCFunction)reader_close,
-        METH_NOARGS,
-        PyDoc_STR(
-            "close()\n"
-            "--\n"
-            "\n"
-            "Close the FST reader and release resources."
-       )
-    },
+    READER_METHOD_NOARGS(reset_scope                    ),
+    READER_METHOD_KVARGS(push_scope                     ),
+    READER_METHOD_NOARGS(pop_scope                      ),
+    READER_METHOD_NOARGS(get_current_flat_scope         ),
+    READER_METHOD_NOARGS(get_current_scope_user_info    ),
+    READER_METHOD_NOARGS(get_scope_len                  ),
+    READER_METHOD_KVARGS(clear_facility_process_mask    ),
+    READER_METHOD_NOARGS(clear_facility_process_mask_all),
+    READER_METHOD_KVARGS(set_facility_process_mask      ),
+    READER_METHOD_NOARGS(set_facility_process_mask_all  ),
+    READER_METHOD_KVARGS(get_facility_process_mask      ),
+    READER_METHOD_KVARGS(get_dump_activity_change_time  ),
+    READER_METHOD_KVARGS(get_dump_activity_change_value ),
+    READER_METHOD_KVARGS(set_limit_time_range           ),
+    READER_METHOD_NOARGS(set_unlimited_time_range       ),
+    READER_METHOD_KVARGS(set_vcd_extensions             ),
+    READER_METHOD_KVARGS(get_value_from_handle_at_time  ),
+    READER_METHOD_KVARGS(set_native_doubles_on_callback ),
+    READER_METHOD_KVARGS(process_hierarchy              ),
+    READER_METHOD_NOARGS(hiers                          ),
+    READER_METHOD_NOARGS(blocks                         ),
+    READER_METHOD_NOARGS(close                          ),
     {NULL}
 };
 
