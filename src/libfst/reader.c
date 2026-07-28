@@ -46,7 +46,7 @@
 #define OBJECT_NAME         Reader
 #endif
 
-#define MODULE_VERSION      "0.0.5"
+#define MODULE_VERSION      "0.0.7"
 #define MODULE_AUTHOR       "Ichiro Kawazome"
 #define MODULE_AUTHOR_EMAIL "ichiro_k@ca2-so-net.ne.jp"
 #define MODULE_LICENSE      "BSD 2-Clause"
@@ -457,6 +457,35 @@ reader_value_change_callback(void*                user_data,
     Py_DECREF(item);
 }
 
+static void
+reader_value_change_callback_varlen(void*                user_data,
+                                    uint64_t             time     ,
+                                    fstHandle            facidx   ,
+                                    const unsigned char* value    ,
+                                    uint32_t             len      )
+{
+    reader_block_iterator* iter = (reader_block_iterator*)user_data;
+    PyObject* py_value = PyUnicode_FromStringAndSize((const char*)value, len);
+
+    if (py_value == NULL) 
+        return;
+
+    PyObject* item = Py_BuildValue("(KKO)",
+                                   (unsigned long long)time,
+                                   (unsigned long long)facidx,
+                                   py_value);
+    Py_DECREF(py_value);
+    
+    if (item == NULL) 
+        return;
+
+    if (PyList_Append(iter->events, item) < 0) {
+        Py_DECREF(item);
+        return;
+    }
+    Py_DECREF(item);
+}
+
 static PyObject*
 reader_block_iterator_iter(PyObject* self)
 {
@@ -468,10 +497,11 @@ static PyObject*
 reader_block_iterator_next(reader_block_iterator* iter)
 {
     if (!iter->loaded) {
-        fstReaderIterBlocks(iter->reader->ctx,
-                            reader_value_change_callback,
-                            iter,
-                            NULL
+        fstReaderIterBlocks2(iter->reader->ctx,
+                             reader_value_change_callback,
+                             reader_value_change_callback_varlen,
+                             iter,
+                             NULL
         );
         iter->loaded = 1;
     }
