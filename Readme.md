@@ -1,32 +1,112 @@
 python-libfst
 ==================================================================================
 
-Installation
+Overview
 ----------------------------------------------------------------------------------
 
-### From source:
+Python bindings for GTKWave FST library.
 
-#### 1. Install required tools:
+`python3-libfst` provides Python interfaces for reading and writing
+GTKWave FST (Fast Signal Trace) waveform files.
 
- * GCC or Clang compiler
- * Python development headers (e.g., `python3-dev` on Linux)
+The package contains C extension modules based on the FST library:
 
-#### 2. Clone the repository:
+- `libfst.reader` - FST waveform reader
+- `libfst.writer` - FST waveform writer
+- `libfst.hier`   - FST hierarchy objects
+- `libfst.Enum`   - FST enumeration support
 
-```console
-shell$ git clone https://github.com/ikwzm/python-libfst.git
-shell$ cd python-libfst
+
+Install
+----------------------------------------------------------------------------------
+
+### Requirements
+
+#### Software
+
+- Python 3.9 or later
+- setuptools
+- C compiler (gcc or clang)
+- Git
+
+
+#### Debian / Ubuntu
+
+Install required packages:
+
+```bash
+sudo apt install python3-dev python3-pip build-essential git
 ```
 
-#### 3. Build libfst module
+### Get Source Code
 
-```console
-shell$ python3 setup.py build_ext --inplace
+Clone the repository with the FST library submodule:
+
+```bash
+git clone --recurse-submodules https://github.com/ikwzm/python3-libfst.git
+cd python3-libfst
 ```
 
-#### 4. Install libfst package
+If the repository was cloned without submodules:
 
-```console
-shell$ sudo python3 setup.py install
+```bash
+git submodule update --init --recursive
 ```
+
+The FST library source is included as a git submodule:
+
+```
+libfst/
+└── src/
+    ├── fstapi.c
+    ├── fstapi.h
+    ├── fastlz.c
+    └── lz4.c
+```
+
+### Build
+
+Build the extension modules:
+
+```bash
+python setup.py build_ext --inplace
+```
+
+### Install Package
+
+Install the package into the current Python environment:
+
+```bash
+python -m pip install .
+```
+
+For development, use editable installation:
+
+```bash
+python -m pip install -e .
+```
+
+### Verify Installation
+
+Run Python:
+
+```bash
+python
+```
+
+Check import:
+
+```python
+import libfst
+
+print(libfst.__version__)
+```
+
+License
+----------------------------------------------------------------------------------
+
+This project uses the GTKWave FST library.
+
+See the license information in the included FST source tree.
+
 
