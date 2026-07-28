@@ -32,7 +32,7 @@
 #include <sys/mman.h>
 #include <unistd.h>
 #include <stdatomic.h>
-#include <libfst/fstapi.h>
+#include <fstapi.h>
 
 #ifndef PACKAGE_NAME
 #define PACKAGE_NAME        libfst
@@ -46,7 +46,7 @@
 #define OBJECT_NAME         Reader
 #endif
 
-#define MODULE_VERSION      "0.0.7"
+#define MODULE_VERSION      "0.0.8"
 #define MODULE_AUTHOR       "Ichiro Kawazome"
 #define MODULE_AUTHOR_EMAIL "ichiro_k@ca2-so-net.ne.jp"
 #define MODULE_LICENSE      "BSD 2-Clause"

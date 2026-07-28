@@ -21,6 +21,8 @@ assert author
 assert author_email
 assert description
 
+libfst_source_dir = root_dir / "libfst" / "src"
+
 extensions  = [
     Extension(
         f'{package_name}.Enum',
@@ -28,7 +30,7 @@ extensions  = [
             str(source_dir / 'enum.c'),
         ],
         define_macros = [('PACKAGE_NAME', package_name)],
-        include_dirs  = [str(source_dir)],
+        include_dirs  = [str(source_dir), str(libfst_source_dir)],
     ),
     Extension(
         f'{package_name}.hier',
@@ -36,29 +38,29 @@ extensions  = [
             str(source_dir / 'hier.c'),
         ],
         define_macros = [('PACKAGE_NAME', package_name)],
-        include_dirs  = [str(source_dir)],
+        include_dirs  = [str(source_dir), str(libfst_source_dir)],
     ),
     Extension(
         f'{package_name}.reader',
         sources = [
             str(source_dir / 'reader.c'),
-            str(source_dir / 'libfst' / 'fstapi.c'),
-            str(source_dir / 'libfst' / 'fastlz.c'),
-            str(source_dir / 'libfst' / 'lz4.c'   ),
+            str(libfst_source_dir / 'fstapi.c'),
+            str(libfst_source_dir / 'fastlz.c'),
+            str(libfst_source_dir / 'lz4.c'   ),
         ],
         define_macros = [('PACKAGE_NAME', package_name)],
-        include_dirs  = [str(source_dir)],
+        include_dirs  = [str(source_dir), str(libfst_source_dir)],
     ),
     Extension(
         f'{package_name}.writer',
         sources = [
             str(source_dir / 'writer.c'),
-            str(source_dir / 'libfst' / 'fstapi.c'),
-            str(source_dir / 'libfst' / 'fastlz.c'),
-            str(source_dir / 'libfst' / 'lz4.c'   ),
+            str(libfst_source_dir / 'fstapi.c'),
+            str(libfst_source_dir / 'fastlz.c'),
+            str(libfst_source_dir / 'lz4.c'   ),
         ],
         define_macros = [('PACKAGE_NAME', package_name)],
-        include_dirs  = [str(source_dir)],
+        include_dirs  = [str(source_dir), str(libfst_source_dir)],
     ),
 ]    
 

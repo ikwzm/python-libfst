@@ -33,7 +33,7 @@
 #include <unistd.h>
 #include <stdbool.h>
 #include <stdatomic.h>
-#include <libfst/fstapi.h>
+#include <fstapi.h>
 
 #ifndef PACKAGE_NAME
 #define PACKAGE_NAME        libfst
@@ -47,7 +47,7 @@
 #define OBJECT_NAME         Writer
 #endif
 
-#define MODULE_VERSION      "0.0.6"
+#define MODULE_VERSION      "0.0.8"
 #define MODULE_AUTHOR       "Ichiro Kawazome"
 #define MODULE_AUTHOR_EMAIL "ichiro_k@ca2-so-net.ne.jp"
 #define MODULE_LICENSE      "BSD 2-Clause"
