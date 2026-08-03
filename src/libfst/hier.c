@@ -42,7 +42,7 @@
 #define MODULE_NAME         hier
 #endif
 
-#define MODULE_VERSION      "0.0.8"
+#define MODULE_VERSION      "0.0.9"
 #define MODULE_AUTHOR       "Ichiro Kawazome"
 #define MODULE_AUTHOR_EMAIL "ichiro_k@ca2-so-net.ne.jp"
 #define MODULE_LICENSE      "BSD 2-Clause"
@@ -298,11 +298,205 @@ static PyTypeObject hier_attr_type = {
     .tp_doc        = "GTKWave FST reader hierarchy attribute begin",
 };
 
+typedef struct {
+    hier_attr_object   base;
+    PyObject*          pathname;
+    unsigned long long handle;
+} hier_attr_pathname_object;
+
+static PyMemberDef hier_attr_pathname_members[] = {
+    {"pathname" , Py_T_OBJECT_EX, offsetof(hier_attr_pathname_object, pathname), Py_READONLY, "Attribute Pathname"},
+    {"handle"   , Py_T_ULONGLONG, offsetof(hier_attr_pathname_object, handle  ), Py_READONLY, "Attribute Pathname handle"},
+    {NULL}
+};
+
+#define ATTR_PATHNAME_OBJECT_NAME_STRING "AttrPathname"
+
+static PyObject*
+hier_attr_pathname_repr(hier_attr_pathname_object* self)
+{
+    return PyUnicode_FromFormat(
+        PACKAGE_NAME_STRING "." MODULE_NAME_STRING "." ATTR_PATHNAME_OBJECT_NAME_STRING
+        "(attr_type=%d, subtype=%d, pathname=%R, handle=%llu)",
+        self->base.type,
+        self->base.subtype,
+        self->pathname,
+        self->handle
+    );
+}
+
+static void
+hier_attr_pathname_dealloc(hier_attr_pathname_object* self)
+{
+    Py_XDECREF(self->pathname);
+    hier_attr_dealloc(&self->base);
+}    
+
+static PyTypeObject hier_attr_pathname_type = {
+    PyVarObject_HEAD_INIT(NULL, 0)
+    .tp_name       = PACKAGE_NAME_STRING "." MODULE_NAME_STRING "." ATTR_PATHNAME_OBJECT_NAME_STRING,
+    .tp_basicsize  = sizeof(hier_attr_pathname_object),
+    .tp_base       = &hier_attr_type,
+    .tp_dealloc    = (destructor)hier_attr_pathname_dealloc,
+    .tp_repr       = (reprfunc)hier_attr_pathname_repr,
+    .tp_flags      = Py_TPFLAGS_DEFAULT,
+    .tp_members    = hier_attr_pathname_members,
+    .tp_doc        = "GTKWave FST reader hierarchy attribute pathname",
+};
+
+static PyObject*
+hier_attr_pathname_from_fst(const struct fstHier* h)
+{
+    hier_attr_pathname_object* obj;
+    obj = PyObject_New(hier_attr_pathname_object, &hier_attr_pathname_type);
+    if (obj == NULL)
+        return NULL;
+    obj->base.type    = h->u.attr.typ;
+    obj->base.subtype = h->u.attr.subtype;
+    obj->base.arg     = h->u.attr.arg;
+    obj->pathname     = NULL;
+    obj->handle       = (unsigned long long)h->u.attr.arg;
+    obj->base.name    = new_unicode_or_none(h->u.attr.name);
+    if (obj->base.name == NULL) {
+        Py_DECREF(obj);
+        return NULL;
+    }
+    obj->pathname     = Py_NewRef(obj->base.name);
+    return (PyObject*) obj;
+}
+
+typedef struct {
+    hier_attr_object   base;
+    unsigned long long handle;
+    unsigned long long line;
+} hier_attr_sourcestem_object;
+
+static PyMemberDef hier_attr_sourcestem_members[] = {
+    {"handle"   , Py_T_ULONGLONG, offsetof(hier_attr_sourcestem_object, handle), Py_READONLY, "Attribute Sourcestem handle"},
+    {"line"     , Py_T_ULONGLONG, offsetof(hier_attr_sourcestem_object, line  ), Py_READONLY, "Attribute Sourcestem line"},
+    {NULL}
+};
+
+#define ATTR_SOURCESTEM_OBJECT_NAME_STRING "AttrSourceStem"
+
+static PyObject*
+hier_attr_sourcestem_repr(hier_attr_sourcestem_object* self)
+{
+    return PyUnicode_FromFormat(
+        PACKAGE_NAME_STRING "." MODULE_NAME_STRING "." ATTR_SOURCESTEM_OBJECT_NAME_STRING
+        "(attr_type=%d, subtype=%d, handle=%llu, line=%llu)",
+        self->base.type,
+        self->base.subtype,
+        self->handle,
+        self->line
+    );
+}
+
+static PyTypeObject hier_attr_sourcestem_type = {
+    PyVarObject_HEAD_INIT(NULL, 0)
+    .tp_name       = PACKAGE_NAME_STRING "." MODULE_NAME_STRING "." ATTR_SOURCESTEM_OBJECT_NAME_STRING,
+    .tp_basicsize  = sizeof(hier_attr_sourcestem_object),
+    .tp_base       = &hier_attr_type,
+    .tp_repr       = (reprfunc)hier_attr_sourcestem_repr,
+    .tp_flags      = Py_TPFLAGS_DEFAULT,
+    .tp_members    = hier_attr_sourcestem_members,
+    .tp_doc        = "GTKWave FST reader hierarchy attribute sourcestem",
+};
+
+static PyObject*
+hier_attr_sourcestem_from_fst(const struct fstHier* h)
+{
+    hier_attr_sourcestem_object* obj;
+    obj = PyObject_New(hier_attr_sourcestem_object, &hier_attr_sourcestem_type);
+    if (obj == NULL)
+        return NULL;
+    obj->base.type    = h->u.attr.typ;
+    obj->base.subtype = h->u.attr.subtype;
+    obj->base.arg     = h->u.attr.arg;
+    obj->line         = (unsigned long long)h->u.attr.arg;
+    obj->handle       = (unsigned long long)h->u.attr.arg_from_name;
+    obj->base.name    = new_unicode_or_none(NULL);
+    return (PyObject*) obj;
+}
+
+/*****/
+
+typedef struct {
+    hier_attr_object             base;
+    enum fstSupplementalVarType  var_type;
+    enum fstSupplementalDataType data_type;
+} hier_attr_supplemental_object;
+
+static PyMemberDef hier_attr_supplemental_members[] = {
+    {"var_type" , Py_T_UBYTE, offsetof(hier_attr_supplemental_object, var_type ), Py_READONLY, "Attribute Supplemental variable type"},
+    {"data_type", Py_T_UBYTE, offsetof(hier_attr_supplemental_object, data_type), Py_READONLY, "Attribute Supplemental data type"},
+    {NULL}
+};
+
+#define ATTR_SUPPLEMENTAL_OBJECT_NAME_STRING "AttrSupplemental"
+
+static PyObject*
+hier_attr_supplemental_repr(hier_attr_supplemental_object* self)
+{
+    return PyUnicode_FromFormat(
+        PACKAGE_NAME_STRING "." MODULE_NAME_STRING "." ATTR_SUPPLEMENTAL_OBJECT_NAME_STRING
+        "(attr_type=%d, subtype=%d, name=%R,  arg=%llu, var_type=%d, data_type=%d)",
+        self->base.type,
+        self->base.subtype,
+        self->base.name,
+        self->base.arg,
+        self->var_type,
+        self->data_type
+    );
+}
+
+static PyTypeObject hier_attr_supplemental_type = {
+    PyVarObject_HEAD_INIT(NULL, 0)
+    .tp_name       = PACKAGE_NAME_STRING "." MODULE_NAME_STRING "." ATTR_SUPPLEMENTAL_OBJECT_NAME_STRING,
+    .tp_basicsize  = sizeof(hier_attr_supplemental_object),
+    .tp_base       = &hier_attr_type,
+    .tp_repr       = (reprfunc)hier_attr_supplemental_repr,
+    .tp_flags      = Py_TPFLAGS_DEFAULT,
+    .tp_members    = hier_attr_supplemental_members,
+    .tp_doc        = "GTKWave FST reader hierarchy attribute supplemental",
+};
+
+static PyObject*
+hier_attr_supplemental_from_fst(const struct fstHier* h)
+{
+    hier_attr_supplemental_object* obj;
+    obj = PyObject_New(hier_attr_supplemental_object, &hier_attr_supplemental_type);
+    if (obj == NULL)
+        return NULL;
+    obj->base.type    = h->u.attr.typ;
+    obj->base.subtype = h->u.attr.subtype;
+    obj->base.arg     = h->u.attr.arg;
+    obj->var_type     = h->u.attr.arg >> FST_SDT_SVT_SHIFT_COUNT;
+    obj->data_type    = h->u.attr.arg &  FST_SDT_ABS_MAX;
+    obj->base.name    = new_unicode_or_none(h->u.attr.name);
+    if (obj->base.name == NULL) {
+        Py_DECREF(obj);
+        return NULL;
+    }
+    return (PyObject*) obj;
+}
+
 static PyObject*
 hier_attr_from_fst(const struct fstHier* h)
 {
-    hier_attr_object* obj = PyObject_New(hier_attr_object, &hier_attr_type);
+    if ((h->u.attr.typ == FST_AT_MISC) && (h->u.attr.subtype == FST_MT_PATHNAME)) 
+        return hier_attr_pathname_from_fst(h);
 
+    if ((h->u.attr.typ == FST_AT_MISC) && (h->u.attr.subtype == FST_MT_SOURCESTEM)) 
+        return hier_attr_sourcestem_from_fst(h);
+
+    if ((h->u.attr.typ == FST_AT_MISC) && (h->u.attr.subtype == FST_MT_SOURCEISTEM)) 
+        return hier_attr_sourcestem_from_fst(h);
+
+    if ((h->u.attr.typ == FST_AT_MISC) && (h->u.attr.subtype == FST_MT_SUPVAR)) 
+        return hier_attr_supplemental_from_fst(h);
+
+    hier_attr_object* obj = PyObject_New(hier_attr_object, &hier_attr_type);
     if (obj == NULL)
         return NULL;
     obj->type      = h->u.attr.typ;
@@ -417,6 +611,15 @@ PYINIT_FUNC(MODULE_NAME) {
     if (PyType_Ready(&hier_attr_type) < 0) {
         return NULL;
     }
+    if (PyType_Ready(&hier_attr_pathname_type) < 0) {
+        return NULL;
+    }
+    if (PyType_Ready(&hier_attr_sourcestem_type) < 0) {
+        return NULL;
+    }
+    if (PyType_Ready(&hier_attr_supplemental_type) < 0) {
+        return NULL;
+    }
     if (PyType_Ready(&hier_attr_end_type) < 0) {
         return NULL;
     }
@@ -450,6 +653,27 @@ PYINIT_FUNC(MODULE_NAME) {
     Py_INCREF(&hier_attr_type);
     if (PyModule_AddObject(m, ATTR_OBJECT_NAME_STRING, (PyObject*)&hier_attr_type) < 0) {
         Py_DECREF(&hier_attr_type);
+        Py_DECREF(m);
+        return NULL;
+    }
+    
+    Py_INCREF(&hier_attr_pathname_type);
+    if (PyModule_AddObject(m, ATTR_PATHNAME_OBJECT_NAME_STRING, (PyObject*)&hier_attr_pathname_type) < 0) {
+        Py_DECREF(&hier_attr_pathname_type);
+        Py_DECREF(m);
+        return NULL;
+    }
+    
+    Py_INCREF(&hier_attr_sourcestem_type);
+    if (PyModule_AddObject(m, ATTR_SOURCESTEM_OBJECT_NAME_STRING, (PyObject*)&hier_attr_sourcestem_type) < 0) {
+        Py_DECREF(&hier_attr_sourcestem_type);
+        Py_DECREF(m);
+        return NULL;
+    }
+    
+    Py_INCREF(&hier_attr_supplemental_type);
+    if (PyModule_AddObject(m, ATTR_SUPPLEMENTAL_OBJECT_NAME_STRING, (PyObject*)&hier_attr_supplemental_type) < 0) {
+        Py_DECREF(&hier_attr_supplemental_type);
         Py_DECREF(m);
         return NULL;
     }
