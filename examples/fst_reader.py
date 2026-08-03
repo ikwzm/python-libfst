@@ -178,14 +178,15 @@ class FST_Reader:
             return f"UNKNOWN({subtype})"
         
     def read_tree(self):
+        self.tree.setdefault("contents", []).clear()
         attributes = []
         stack      = [self.tree]
         
         for item in self.reader.hiers():
             if   isinstance(item, libfst.hier.Scope):
                 node = {
-                    "name"       : item.name,
-                    "type"       : self.enum_name(self.ScopeType,item.scope_type),
+                    "name"     : item.name,
+                    "type"     : self.enum_name(self.ScopeType,item.scope_type),
                 }
                 if attributes:
                     node.setdefault("attributes", []).extend(attributes)
