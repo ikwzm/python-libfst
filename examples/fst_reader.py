@@ -3,16 +3,20 @@
 # Copyright (c) 2026 ikwzm
 
 import libfst
+import fnmatch
 from enum import IntEnum
 
 class FST_Reader:
     def __init__(self, file_name):
-        self.reader    = libfst.Reader(file_name)
-        self.file_name = file_name
-        self.file_type = self.reader.file_type
-        self.date      = self.reader.date.rstrip("\n\r")
-        self.version   = self.reader.version.rstrip("\n\r")
-        self.tree      = {"contents": []}
+        self.reader     = libfst.Reader(file_name)
+        self.file_name  = file_name
+        self.file_type  = self.reader.file_type
+        self.date       = self.reader.date.rstrip("\n\r")
+        self.version    = self.reader.version.rstrip("\n\r")
+        self.time_scale = self.reader.time_scale
+        self.start_time = self.reader.start_time
+        self.end_time   = self.reader.end_time
+        self.tree       = {"contents": []}
 
     class FileType(IntEnum):
         VERILOG                    = libfst.Enum.FST_FT_VERILOG
@@ -178,14 +182,15 @@ class FST_Reader:
             return f"UNKNOWN({subtype})"
         
     def read_tree(self):
+        self.tree.setdefault("contents", []).clear()
         attributes = []
         stack      = [self.tree]
         
         for item in self.reader.hiers():
             if   isinstance(item, libfst.hier.Scope):
                 node = {
-                    "name"       : item.name,
-                    "type"       : self.enum_name(self.ScopeType,item.scope_type),
+                    "name"     : item.name,
+                    "type"     : self.enum_name(self.ScopeType,item.scope_type),
                 }
                 if attributes:
                     node.setdefault("attributes", []).extend(attributes)
@@ -242,15 +247,158 @@ class FST_Reader:
                 pass
         return self.tree
 
+
+    def find_var_list(self, pattern, tree=None):
+        var_list     = []
+        pattern_list = pattern.split("::")
+        
+        def match_parts(path_list, pattern_list):
+            if not pattern_list:
+                return not path_list
+            if pattern_list[0] == "**":
+                # ** は0階層以上に一致
+                if match_parts(path_list, pattern_list[1:]):
+                    return True
+                if not path_list:
+                    return False
+                return match_parts(path_list[1:], pattern_list)
+            if not path_list:
+                return False
+            is_vhdl = path_list[0][1]
+            if is_vhdl:
+                path    = path_list[0][0].casefold()
+                pattern = pattern_list[0].casefold()
+            else:
+                path    = path_list[0][0]
+                pattern = pattern_list[0]
+            if fnmatch.fnmatchcase(path, pattern):
+                return match_parts(path_list[1:], pattern_list[1:])
+            return False
+
+        def walk(node, path_list=None, vhdl_scope=None):
+            if path_list is None:
+                path_list = []
+            if vhdl_scope is None:
+                vhdl_scope = (self.file_type == libfst.Enum.FST_FT_VHDL)
+            vhdl_var = False
+            name = node.get("name")
+            if name:
+                if "contents" in node:
+                    scope_type = node.get("type")
+                    vhdl_scope = ((self.file_type == libfst.Enum.FST_FT_VHDL) or
+                                  (scope_type in ("VHDL_ARCHITECTURE", 
+                                                  "VHDL_PROCEDURE"   ,
+                                                  "VHDL_FUNCTION"    ,
+                                                  "VHDL_RECORD"      ,
+                                                  "VHDL_PROCESS"     ,
+                                                  "VHDL_BLOCK"       ,
+                                                  "VHDL_FOR_GENERATE",
+                                                  "VHDL_IF_GENERATE" ,
+                                                  "VHDL_GENERATE"    ,
+                                                  "VHDL_PACKAGE"     )))
+                else:
+                    for attribute in node.get("attributes", []):
+                        var_type = attribute.get("var_type")
+                        if (var_type == "SVT_VHDL_SIGNAL"   or
+                            var_type == "SVT_VHDL_VARIABLE" or 
+                            var_type == "SVT_VHDL_CONSTANT" or
+                            var_type == "SVT_VHDL_FILE"     or
+                            var_type == "SVT_VHDL_MEMORY"   ):
+                            vhdl_var = True
+                            break
+                is_vhdl = (vhdl_scope or vhdl_var)
+                path_list.append((name, is_vhdl))
+                if "handle" in node:
+                    if match_parts(path_list, pattern_list):
+                        path_name_list = [name for name,is_vhdl in path_list]
+                        var_list.append((path_name_list, node))
+            for child in node.get("contents", []):
+                walk(child, path_list, vhdl_scope)
+            if name:
+                path_list.pop()
+        if tree is None:
+            tree = self.tree
+        walk(tree)
+        return var_list
+
     def close(self):
         if (self.reader is not None):
             self.reader.close()
 
+    TIME_UNITS = (
+       (  0, "s" ),
+       ( -3, "ms"),
+       ( -6, "us"),    # または "µs"
+       ( -9, "ns"),
+       (-12, "ps"),
+       (-15, "fs"),
+       (-18, "as"),
+    )
+
+    def format_time_scale(self, time_scale):
+        for unit_scale, unit in reversed(self.TIME_UNITS):
+            if time_scale <= unit_scale:
+                value = 10 ** (unit_scale - time_scale)
+                return f"{value:g} {unit}"
+        return f"1e{time_scale} s"
+
+    def format_timestamp(self, timestamp, time_scale=None):
+        if time_scale is None:
+            time_scale = self.time_scale
+        for unit_scale, unit in self.TIME_UNITS:
+            value = timestamp * (10 ** (time_scale - unit_scale))            
+            if value >= 1 and value == int(value):
+                return f"{int(value)} {unit}"
+        for unit_scale, unit in self.TIME_UNITS:
+            value = timestamp * (10 ** (time_scale - unit_scale))            
+            if value >= 1:
+                return f"{value:g} {unit}"
+        unit_scale, unit = self.TIME_UNITS[-1]
+        value = timestamp * (10 ** time_scale - unit_scale)
+        return f"{value:g} {unit}"
+
+    def parse_timestamp(self, value, unit=None, time_scale=None):
+        if unit is None:
+            return int(value)
+        if time_scale is None:
+            time_scale = self.time_scale
+        unit_scale = None
+        for scale, name in self.TIME_UNITS:
+            if name == unit:
+                unit_scale = scale
+                break;
+        if unit_scale is None:
+            raise ValueError(f"Unknown time unit:{unit}")
+        timestamp = value * (10 ** (unit_scale - time_scale))
+        return int(timestamp)
+
+    def set_limit_time_range(self, start_time, end_time):
+        self.reader.set_limit_time_range(start_time, end_time)
+
+    def set_unlimited_time_range(self):
+        self.reader.set_unlimited_time_range()
+
+    def set_facility_process_mask(self, handle):
+        self.reader.set_facility_process_mask(handle)
+    
+    def set_facility_process_mask_all(self):
+        self.reader.set_facility_process_mask_all()
+    
+    def clear_facility_process_mask(self, handle):
+        self.reader.clear_facility_process_mask(handle)
+    
+    def clear_facility_process_mask_all(self):
+        self.reader.clear_facility_process_mask_all()
+
+    def blocks(self):
+        return self.reader.blocks()
+    
     def print_info(self):
         print(f"File      : {self.file_name}")
         print(f"FileType  : {self.enum_name(self.FileType, self.file_type)}")
         print(f"Date      : {self.date}")
         print(f"Version   : {self.version}")
-        print(f"StartTime : {self.reader.start_time}")
-        print(f"EndTime   : {self.reader.end_time}")
+        print(f"StartTime : {self.format_timestamp(self.start_time)} ({self.start_time})")
+        print(f"EndTime   : {self.format_timestamp(self.end_time)} ({self.end_time})")
+        print(f"TimeScale : {self.format_time_scale(self.time_scale)} ({self.time_scale})")
         print(f"Signals   : {self.reader.var_count}")
