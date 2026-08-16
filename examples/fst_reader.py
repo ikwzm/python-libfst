@@ -248,10 +248,10 @@ class FST_Reader:
         return self.tree
 
 
-    def find_var_list(self, pattern, tree=None):
+    def find_var_list(self, pattern, tree=None, struct_as_var=False):
         var_list     = []
         pattern_list = pattern.split("::")
-        
+
         def match_parts(path_list, pattern_list):
             if not pattern_list:
                 return not path_list
@@ -280,9 +280,11 @@ class FST_Reader:
                 path_list = []
             if vhdl_scope is None:
                 vhdl_scope = (self.file_type == libfst.Enum.FST_FT_VHDL)
-            vhdl_var = False
-            name = node.get("name")
-            if name:
+            node_name = node.get("name")
+            stop_walk = False
+            if node_name:
+                vhdl_var  = False
+                is_struct = False
                 if "contents" in node:
                     scope_type = node.get("type")
                     vhdl_scope = ((self.file_type == libfst.Enum.FST_FT_VHDL) or
@@ -296,6 +298,7 @@ class FST_Reader:
                                                   "VHDL_IF_GENERATE" ,
                                                   "VHDL_GENERATE"    ,
                                                   "VHDL_PACKAGE"     )))
+                    is_struct = (scope_type in ("VCD_STRUCT", "VCD_UNION", "VHDL_RECORD"))
                 else:
                     for attribute in node.get("attributes", []):
                         var_type = attribute.get("var_type")
@@ -307,15 +310,18 @@ class FST_Reader:
                             vhdl_var = True
                             break
                 is_vhdl = (vhdl_scope or vhdl_var)
-                path_list.append((name, is_vhdl))
-                if "handle" in node:
+                path_list.append((node_name, is_vhdl))
+                if "handle" in node or (is_struct and struct_as_var):
                     if match_parts(path_list, pattern_list):
                         path_name_list = [name for name,is_vhdl in path_list]
                         var_list.append((path_name_list, node))
-            for child in node.get("contents", []):
-                walk(child, path_list, vhdl_scope)
-            if name:
+                        stop_walk = True
+            if not stop_walk:
+                for child in node.get("contents", []):
+                    walk(child, path_list, vhdl_scope)
+            if node_name:
                 path_list.pop()
+
         if tree is None:
             tree = self.tree
         walk(tree)
@@ -402,3 +408,4 @@ class FST_Reader:
         print(f"EndTime   : {self.format_timestamp(self.end_time)} ({self.end_time})")
         print(f"TimeScale : {self.format_time_scale(self.time_scale)} ({self.time_scale})")
         print(f"Signals   : {self.reader.var_count}")
+
