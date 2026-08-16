@@ -60,8 +60,11 @@ class FST_Wave_DataBase:
             # hi_pos : end_time より大きい最初の位置
             hi_pos = bisect_right(self.time_list, end_time  ) 
 
-            # start_time 〜 end_time の変化
-            return list(zip(self.time_list[lo_pos:hi_pos], self.value_list[lo_pos:hi_pos]))
+            # start_time 〜 end_time の変化を示すイタレータを返す
+            return (
+                (self.time_list[i], self.value_list[i])
+                for i in range(lo_pos, hi_pos)
+            )
 
     def __init__(self, fst_reader):
         self.fst_reader   = fst_reader
