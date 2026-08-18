@@ -4,6 +4,7 @@
 
 from   fst_reader        import FST_Reader
 from   fst_wave_database import FST_Wave_DataBase
+import re
 
 class FST_Wave_View_Model:
 
@@ -34,16 +35,89 @@ class FST_Wave_View_Model:
     class View_Signal(View_Item):
         DEFAULT_OPTION = {
             "display_name"    : None ,
+            "value_format"    : None ,
         }
+        VALUE_FORMAT_RE = re.compile(
+            r"^(?P<alternate>\#?)"
+            r"(?P<zero>0?)"
+            r"(?P<width>\d*)"
+            r"(?P<type>[bBoOxXd])"
+            r"(?P<suffix>.*)$"
+        )
         def __init__(self, view_list, path, node, parent_group, option=None):
             super().__init__(view_list, parent_group, option)
             self.path         = path
             self.node         = node
             self.name         = node["name"]
             self.handle       = node["handle"]
+            self.width        = node["width"]
             self.registered   = False
             self.closed       = False
             self.display_name = self.option["display_name"] or self.name
+            self.is_logic     = self.width == 1 and not self.name.endswith("]")
+            self.value_type   = None
+            for attribute in node.get("attributes"):
+                attr_type = attribute.get("type")
+                sub_type  = attribute.get("subtype")
+                if attr_type == "MISC" and sub_type == "SUPVAR":
+                    data_type = attribute.get("data_type")
+                    if data_type in ("SDT_VHDL_BOOLEAN"          ,
+                                     "SDT_VHDL_BIT"              ,
+                                     "SDT_VHDL_BIT_VECTOR"       ,
+                                     "SDT_VHDL_STD_ULOGIC"       ,
+                                     "SDT_VHDL_STD_ULOGIC_VECTOR",
+                                     "SDT_VHDL_STD_LOGIC"        ,
+                                     "SDT_VHDL_STD_LOGIC_VECTOR" ,
+                                     "SDT_VHDL_UNSIGNED"         ,
+                                     "SDT_VHDL_SIGNED"           ,
+                                     "SDT_VHDL_INTEGER"          ,
+                                     "SDT_VHDL_REAL"             ,
+                                     "SDT_VHDL_NATURAL"          ,
+                                     "SDT_VHDL_POSITIVE"         ,
+                                     "SDT_VHDL_CHARACTER"        ,
+                                     "SDT_VHDL_STRING"           ):
+                        self.value_type = data_type[4:]
+                    else:
+                        self.value_type = None
+                    break
+                if attr_type == "ENUM":
+                    if sub_type in ("SV_INTEGER" , "SV_UNSIGNED_INTEGER" ,
+                                    "SV_BIT"     , "SV_UNSIGNED_BIT"     ,
+                                    "SV_LOGIC"   , "SV_UNSIGNED_LOGIC"   ,
+                                    "SV_INT"     , "SV_UNSIGNED_INT"     ,
+                                    "SV_SHORTINT", "SV_UNSIGNED_SHORTINT",
+                                    "SV_LONGINT" , "SV_UNSIGNED_LONGINT" ,
+                                    "SV_BYTE"    , "SV_UNSIGNED_BYTE"    ):
+                        self.value_type = sub_type
+                    else:
+                        self.value_type = None
+                    break
+            self.value_format = self.option["value_format"]
+            if self.value_format is None:
+                if self.width % 4 == 0:
+                    self.value_format = f"#0{self.width // 4}x"
+                else:
+                    self.value_format = "b"
+            match = self.VALUE_FORMAT_RE.fullmatch(self.value_format)
+            if match is None:
+                raise ValueError(f"Invalid format: {self.value_format!r}")
+            self.value_format_alternate = bool(match.group("alternate"))
+            self.value_format_zero      = bool(match.group("zero"))
+            self.value_format_width     = int(match.group("width")) if match.group("width") else None
+            self.value_format_type      = match.group("type")
+            self.value_format_suffix    = match.group("suffix")
+            if not self.value_format_alternate:
+                self.value_format_prefix = ""
+            elif self.value_format_type == "b":
+                self.value_format_prefix = "0b"
+            elif self.value_format_type == "o":
+                self.value_format_prefix = "0o"
+            elif self.value_format_type == "x":
+                self.value_format_prefix = "0x"
+            elif self.value_format_type == "X":
+                self.value_format_prefix = "0X"
+            else:
+                self.value_format_prefix = ""
 
         def close(self):
             if self.closed is True:
@@ -66,6 +140,44 @@ class FST_Wave_View_Model:
                 raise RuntimeError("View_Model is closed")
             self.register_database()
             return self.model.database.get(self.handle, start_time, end_time)
+
+        def format_value(self, value):
+            if self.is_logic:
+                return value
+            if all(c in "01" for c in value):
+                return format(int(value,2), self.value_format)
+
+            def _format_4state_bits(value, width):
+                result  = []
+                padding = (-len(value)) % width
+                value   = "0" * padding + value
+                for pos in range(0, len(value), width):
+                    bits = value[pos:pos + width]
+                    if all(c in "01" for c in bits):
+                        number = int(bits, 2)
+                        result.append(format(number, self.value_format_type))
+                    elif "u" in bits or "U" in bits:
+                        result.append("U")
+                    elif "z" in bits or "Z" in bits:
+                        result.append("Z")
+                    else:
+                        result.append("?")
+                return "".join(result)
+            
+            if   self.value_format_type in ("x", "X"):
+                result = _format_4state_bits(value, 4)
+            elif self.value_format_type == "o":
+                result = _format_4state_bits(value, 3)
+            else:
+                result = value
+            if self.value_format_width is not None and len(result) < self.value_format_width:
+                padding = self.value_format_width - len(result)
+                if self.value_format_zero:
+                    result = "0" * padding + result
+                else:
+                    result = " " * padding + result
+            return self.value_format_prefix + result + self.value_format_suffix
+            
 
     class View_Group(View_Item):
         DEFAULT_OPTION = {
@@ -248,16 +360,22 @@ class FST_Wave_View_Model:
             return self.option.get(key, default_value)
         
     DEFAULT_OPTION = {
-        "header_height"      : 24 ,
-        "footer_height"      : 24 ,
-        "signal_height"      : 24 ,
-        "signal_name_width"  : 200,
-        "signal_value_width" : 200,
-        "display_rows"       : 24 ,
+        "header_height"      : 24   ,
+        "footer_height"      : 24   ,
+        "signal_height"      : 24   ,
+        "signal_name_width"  : 200  ,
+        "signal_value_width" : 200  ,
+        "display_rows"       : 24   ,
+        "start_time"         : None ,
+        "end_time"           : None ,
+        "edge_slop"          : 3    ,
         "color"              : {
-              "name"  : {"foreground" : "white", "background": "black"},
-              "value" : {"foreground" : "white", "background": "black"},
-              "wave"  : {"foreground" : "green", "background": "black"},
+              "name"  : {"background": "black", "foreground"   : "white"},
+              "value" : {"background": "black", "foreground"   : "white"},
+              "wave"  : {"background": "black",
+                         "signal" : "#00ff00",
+                         "value"  : "white"  ,
+                         "group"  : None},
         }
     }
     INHERITED_OPTION_LIST = ["color"]
@@ -266,15 +384,36 @@ class FST_Wave_View_Model:
         self.file_name      = file_name
         self.reader         = FST_Reader(file_name)
         self.database       = FST_Wave_DataBase(self.reader)
-        self.start_time     = self.reader.start_time
-        self.end_time       = self.reader.end_time
-        self.current_time   = self.start_time
         self.option         = self.merge_option(option, self.DEFAULT_OPTION)
         self.child_option   = self.get_inherited_option(self.option)
         self.reader.read_tree()
+        self.start_time     = self.parse_time(self.option["start_time"])
+        self.end_time       = self.parse_time(self.option["end_time"  ])
+        if self.start_time is None or self.start_time < self.reader.start_time:
+            self.start_time = self.reader.start_time
+        if self.end_time   is None or self.end_time   > self.reader.end_time  :
+            self.end_time   = self.reader.end_time
+        self.current_time   = self.start_time
         self.view_list_list = []
         self.curr_view_list = self.add_view_list("top")
         self.closed         = False
+
+    def parse_time(self, text):
+        if text is None:
+            return None
+        text = text.strip()
+        # 数値 + 単位
+        m = re.fullmatch(r"([0-9]+(?:\.[0-9]+)?)\s*([a-zA-Zµ]+)", text)
+        if m:
+            value = float(m.group(1))
+            unit  = m.group(2)
+            return self.reader.parse_timestamp(value, unit)
+        # 数値のみ
+        m = re.fullmatch(r"[0-9]+", text)
+        if m:
+            return self.reader.parse_timestamp(int(text))
+
+        raise ValueError(f"Invalid time format: {text}")
 
     def deep_copy(self, obj):
         if isinstance(obj, dict):
