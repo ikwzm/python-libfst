@@ -656,15 +656,275 @@ class WaveformArea(QWidget):
             self.waveform_list.append(waveform)
             layout.addWidget(waveform, 0)
 
+        self.marker_widget = self.MarkerWidget(self)
+        self.marker_widget.show()
+        self.marker_widget.raise_()
+        self.cursor_widget = self.CursorWidget(self)
+        self.cursor_widget.show()
+        self.cursor_widget.raise_()
+        QTimer.singleShot(0, self.update_cursor_geometry)
+
+    def update_cursor_geometry(self):
+        if not self.waveform_list:
+            self.cursor_widget.hide()
+            return
+        first_waveform = (self.waveform_list[ 0].signal_waveform_column)
+        last_waveform  = (self.waveform_list[-1].signal_waveform_column)
+        top_left       = first_waveform.mapTo(self, QPoint(0,0))
+        bottom_right   = last_waveform.mapTo( self, QPoint(last_waveform.width(),last_waveform.height()))
+        rect           = QRect(top_left, bottom_right)
+        self.marker_widget.setGeometry(rect)
+        self.marker_widget.raise_()
+        self.marker_widget.show()
+        self.cursor_widget.setGeometry(rect)
+        self.cursor_widget.raise_()
+        self.cursor_widget.show()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.update_cursor_geometry()
+
     def set_time_range(self, start_time, end_time):
         for view_list in self.waveform_list:
             view_list.set_time_range(start_time, end_time)
+        self.marker_widget.set_time_range(start_time, end_time)
+        self.cursor_widget.set_time_range(start_time, end_time)
 
     def set_current_time(self, current_time):
         for view_list in self.waveform_list:
             view_list.set_current_time(current_time)
         self.marker_widget.set_current_time(current_time)
         self.cursor_widget.set_current_time(current_time)
+
+    class MarkerWidget(QWidget):
+        def __init__(self, parent=None):
+            super().__init__(parent)
+            self.parent          = parent
+            self.view_model      = self.parent.view_model
+            self.time_controller = self.parent.time_controller
+            self.start_time      = self.parent.time_controller.start_time
+            self.end_time        = self.parent.time_controller.end_time
+            self.current_time    = None
+            self.setAttribute(Qt.WA_TranslucentBackground)
+            self.setMouseTracking(False)
+
+            self.color = self.view_model.get_color("marker")
+            self.pen   = QPen(QColor(self.color))
+            self.pen.setWidth(1)
+
+        def set_time_range(self, start_time, end_time):
+            if start_time == self.start_time and end_time == self.end_time:
+                return
+            self.start_time = start_time
+            self.end_time   = end_time
+            self.update()
+        
+        def set_current_time(self, current_time):
+            if current_time == self.current_time:
+                return
+            self.current_time = current_time
+            self.update()
+
+        def time_to_x(self, time):
+            if self.end_time == self.start_time:
+                return 0
+            return int((time - self.start_time) * self.width() / (self.end_time - self.start_time))
+
+        def paintEvent(self, event):
+            if self.current_time is None:
+                return
+            if self.current_time < self.start_time:
+                return
+            if self.current_time > self.end_time:
+                return
+            current_x = self.time_to_x(self.current_time)
+            painter = QPainter(self)
+            painter.setPen(self.pen)
+            painter.drawLine(
+               current_x, 0,
+               current_x, self.height()
+            )
+        
+    class CursorWidget(QWidget):
+        def __init__(self, parent=None):
+            super().__init__(parent)
+            self.parent          = parent
+            self.view_model      = self.parent.view_model
+            self.time_controller = self.parent.time_controller
+            self.start_time      = self.parent.time_controller.start_time
+            self.end_time        = self.parent.time_controller.end_time
+            self.marker_time     = None
+            self.cursor_x        = None
+            self.setAttribute(Qt.WA_TranslucentBackground)
+            self.setMouseTracking(True)
+
+            self.color = self.view_model.get_color("cursor")
+            self.pen   = QPen(QColor(self.color))
+            self.pen.setWidth(1)
+
+            self.menu               = QMenu(self)
+            self.center_action      = QAction("Center on Cursor"       , self.menu)
+            self.goto_marker_action = QAction("Go to Marker"           , self.menu)
+            self.zoom_marker_action = QAction("Zoom Marker-Cursor"     , self.menu)
+            self.zoom_in_action     = QAction("Zoom to 200% at Cursor" , self.menu)
+            self.zoom_out_action    = QAction("Zoom to 50%  at Cursor" , self.menu)
+            self.zoom_all_action    = QAction("Zoom All"               , self.menu)
+            self.menu.addAction(self.center_action)
+            self.menu.addAction(self.goto_marker_action)
+            self.menu.addSeparator()
+            self.menu.addAction(self.zoom_marker_action)
+            self.menu.addAction(self.zoom_in_action)
+            self.menu.addAction(self.zoom_out_action)
+            self.menu.addAction(self.zoom_all_action)
+
+        def set_time_range(self, start_time, end_time):
+            if start_time == self.start_time and end_time == self.end_time:
+                return
+            self.start_time = start_time
+            self.end_time   = end_time
+            self.update()
+        
+        def set_current_time(self, current_time):
+            if current_time == self.marker_time:
+                return
+            self.marker_time = current_time
+
+        def set_cursor_x(self, x):
+            if x == self.cursor_x:
+                return
+            self.cursor_x = x
+            self.update()
+
+        def time_to_x(self, time):
+            if self.end_time == self.start_time:
+                return 0
+            return int((time - self.start_time) * self.width() / (self.end_time - self.start_time))
+
+        def paintEvent(self, event):
+            if self.cursor_x is None:
+                return
+            painter = QPainter(self)
+            painter.setPen(self.pen)
+            painter.drawLine(
+                self.cursor_x, 0,
+                self.cursor_x, self.height()
+            )
+
+        def mouseMoveEvent(self, event):
+            x = int(event.position().x())
+            self.set_cursor_x(x)
+
+        def mousePressEvent(self, event):
+            if event.button() == Qt.LeftButton:
+                self.change_current_time_event(event)
+                event.accept()
+                return
+            if event.button() == Qt.RightButton:
+                self.show_menu_event(event)
+                event.accept()
+                return
+            event.ignore()
+
+        def wheelEvent(self, event):
+            waveform = self.get_waveform_at(event.position())
+            if waveform is None:
+                event.ignore()
+                return
+            delta_y = event.angleDelta().y()
+            if   delta_y > 0:
+                waveform.scroll_rows(-1)
+            elif delta_y < 0:
+                waveform.scroll_rows( 1)
+            event.accept()
+
+        def get_waveform_at(self, pos):
+            area_pos = self.mapToParent(pos.toPoint())
+            for waveform in self.parent.waveform_list:
+                column   = waveform.signal_waveform_column
+                top_left = column.mapTo(self.parent, QPoint(0, 0))
+                rect     = QRect(top_left, column.size())
+                if rect.contains(area_pos):
+                    return waveform
+            return None
+
+        def change_current_time_event(self, event):
+            pos = event.position().toPoint()
+            waveform = self.get_waveform_at(event.position())
+            if waveform is None:
+                return
+            global_pos      = self.mapToGlobal(pos)
+            waveform_column = waveform.signal_waveform_column
+            waveform_pos    = waveform_column.mapFromGlobal(global_pos)
+            current_time    = waveform_column.x_to_time(waveform_pos.x())
+            self.time_controller.change_current_time(current_time)
+
+        def show_menu_event(self, event):
+            pos = event.position().toPoint()
+            waveform = self.get_waveform_at(event.position())
+            if waveform is None:
+                return
+            global_pos      = self.mapToGlobal(pos)
+            waveform_column = waveform.signal_waveform_column
+            waveform_pos    = waveform_column.mapFromGlobal(global_pos)
+            cursor_time     = waveform_column.x_to_time(waveform_pos.x())
+            action          = self.menu.exec(self.mapToGlobal(pos))
+            if   action == self.center_action:
+                self.goto_center(cursor_time)
+            elif action == self.goto_marker_action:
+                self.goto_marker(cursor_time)
+            elif action == self.zoom_marker_action:
+                self.zoom_marker(cursor_time)
+            elif action == self.zoom_in_action:
+                self.zoom_in(cursor_time)
+            elif action == self.zoom_out_action:
+                self.zoom_out(cursor_time)
+            elif action == self.zoom_all_action:
+                self.zoom_all(cursor_time)
+
+        def goto_center(self, cursor_time):
+            self.center_on_time(cursor_time)
+
+        def goto_marker(self, cursor_time):
+            if self.marker_time is None:
+                return
+            self.center_on_time(self.marker_time)
+
+        def zoom_marker(self, cursor_time):
+            if self.marker_time is None:
+                return
+            if cursor_time < self.marker_time:
+                new_start_time = cursor_time
+                new_end_time   = self.marker_time
+            else:
+                new_start_time = self.marker_time
+                new_end_time   = cursor_time
+            self.time_controller.change_time_range(new_start_time, new_end_time)
+
+        def zoom_in(self, center_time):
+            time_range = self.end_time - self.start_time
+            if time_range <= 1:
+                return
+            new_range  = max(1, time_range // 2)
+            self.center_on_time(center_time, new_range)
+
+        def zoom_out(self, center_time):
+            time_range = self.end_time - self.start_time
+            new_range  = time_range * 2
+            self.center_on_time(center_time, new_range)
+
+        def zoom_all(self, center_time):
+            new_start_time = self.time_controller.total_start_time
+            new_end_time   = self.time_controller.total_end_time
+            self.time_controller.change_time_range(new_start_time, new_end_time)
+
+        def center_on_time(self, center_time, time_range=None):
+            if time_range is None:
+                time_range = self.end_time - self.start_time
+            new_start_time = int(center_time - time_range // 2)
+            new_end_time   = int(center_time + time_range // 2)
+            self.time_controller.change_time_range(new_start_time, new_end_time)
+            self.set_cursor_x(self.time_to_x(center_time))
+
 
 class HeaderArea(QWidget):
     def __init__(self, view_model, parent=None):
