@@ -7,8 +7,8 @@ import runpy
 
 from PySide6.QtCore    import Qt
 from PySide6.QtCore    import QAbstractTableModel, QModelIndex
-from PySide6.QtCore    import QRect, QSize, QTimer, Signal
-from PySide6.QtGui     import QPainter, QPen, QBrush, QFontMetrics, QColor
+from PySide6.QtCore    import QRect, QSize, QTimer, Signal, QPoint
+from PySide6.QtGui     import QPainter, QPen, QBrush, QFontMetrics, QColor, QPalette, QAction
 from PySide6.QtWidgets import (
     QApplication,
     QTableView,
@@ -18,6 +18,8 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QScrollBar,
     QHeaderView,
+    QLabel,
+    QMenu,
 )
 from fst_wave_view_model import FST_Wave_View_Model
 
@@ -26,347 +28,393 @@ DEFAULT_SIGNAL_HEIGHT      = 24
 DEFAULT_FOOTER_HEIGHT      = 20
 DEFAULT_SIGNAL_NAME_WIDTH  = 300
 DEFAULT_SIGNAL_VALUE_WIDTH = 300
+DEFAULT_SCROLLBAR_WIDTH    = 24
+DEFAULT_DISPLAY_ROW_COUNT  = 25
 
-class SignalNameColumn(QTableView):
-
-    class SignalNameModel(QAbstractTableModel):
-        SIGNAL_COLUMN = 0
-        COLUMN_COUNT  = 1
-
-        def __init__(self, view_model, parent=None):
-            super().__init__(parent)
-            self.view_model   = view_model
-            self.current_time = self.view_model.current_time
-
-        def columnCount(self, parent=QModelIndex()):
-            return self.COLUMN_COUNT
-
-        def rowCount(self, parent=QModelIndex()):
-            return self.view_model.row_count()
-
-        def flags(self, index):
-            return Qt.ItemIsSelectable | Qt.ItemIsEnabled
-            
-        def data(self, index, role=Qt.DisplayRole):
-            if not index.isValid():
-                return None
-
-            item = self.view_model.row_to_item(index.row())
-            if item is None:
-                return None
-
-            if role == Qt.DisplayRole:
-                if index.column() == self.SIGNAL_COLUMN:
-                    if self.view_model.item_is_group(item):
-                        if item.expanded:
-                            mark = "\u25bc"
-                        else:
-                            mark = "\u25b6"
-                    else:
-                            mark = "\u3000"
-                    indent = " " * ((item.depth-1)*2)
-                    return indent + mark + " " + item.display_name
-
-            if role == Qt.BackgroundRole:
-                if index.column() == self.SIGNAL_COLUMN:
-                    color = item.get_background_color("name")
-                    if color is not None:
-                        return QColor(color)
-            
-            if role == Qt.ForegroundRole:
-                if index.column() == self.SIGNAL_COLUMN:
-                    color = item.get_foreground_color("name")
-                    if color is not None:
-                        return QColor(color)
-            
-            return None
-
-        def headerData(self, section, orientation, role=Qt.DisplayRole):
-            if orientation != Qt.Horizontal:
-                return None
-            if role != Qt.DisplayRole:
-                return None
-            if section == self.SIGNAL_COLUMN:
-                return "Signal Name"
-            return None
-
-        def refresh(self):
-            self.beginResetModel()
-            self.endResetModel()
-
-        def set_current_time(self, current_time):
-            self.current_time = current_time;
-            
-    view_model_changed = Signal()
-
-    def __init__(self, view_model, parent=None):
+class WaveformSignals(QWidget):
+    "View_List クラスで指定されている各信号の名称、値、波形を表示するエリア"
+    " このエリアは次の４つのエリアを横に並べている"
+    "   * SignalNameColumn     : 信号の名称を表示するエリア"
+    "   * SignalValueColumn    : 信号の値を表示するエリア"
+    "   * SignalWaveformColumn : 信号の波形を表示するエリア"
+    "   * SignalScrollBar      : 信号を選択するためのスクロールバー"
+    def __init__(self, view_list, parent=None):
         super().__init__(parent)
-        self.view_model   = view_model
-        self.table_model  = self.SignalNameModel(view_model, self)
-        self.current_time = self.view_model.current_time
-        self.setModel(self.table_model)
+        self.parent                 = parent
+        self.view_list              = view_list
+        self.time_controller        = self.parent.time_controller
+        self.signal_row_height      = self.view_list.get_option("signal_height",
+                                                                self.parent.signal_row_height)
+        self.signal_name_width      = self.parent.signal_name_width
+        self.signal_value_width     = self.parent.signal_value_width
+        self.signal_scrollbar_width = self.parent.signal_scrollbar_width
+        self.visible_row_count      = self.parent.visible_row_count
 
-        header_height = self.view_model.get_option("header_height"     , DEFAULT_HEADER_HEIGHT)
-        signal_height = self.view_model.get_option("signal_height"     , DEFAULT_SIGNAL_HEIGHT)
-        footer_height = self.view_model.get_option("footer_height"     , DEFAULT_FOOTER_HEIGHT)
-        name_width    = self.view_model.get_option("signal_name_width" , DEFAULT_SIGNAL_NAME_WIDTH)
+        self.signal_name_column     = self.SignalNameColumn(self)
+        self.signal_value_column    = self.SignalValueColumn(self)
+        self.signal_waveform_column = self.SignalWaveformColumn(self)
+        self.signal_scrollbar       = self.SignalScrollBar(self)
 
-        header = self.horizontalHeader()
-        header.setStretchLastSection(False)
-        header.setFixedHeight(header_height)
-        header.setSectionResizeMode(self.SignalNameModel.SIGNAL_COLUMN, QHeaderView.Fixed)
-        header.resizeSection(self.SignalNameModel.SIGNAL_COLUMN, name_width)
+        self.signal_name_column.setFixedWidth(self.signal_name_width)
+        self.signal_value_column.setFixedWidth(self.signal_value_width)
+        self.signal_scrollbar.setFixedWidth(self.signal_scrollbar_width)
 
-        self.setSelectionBehavior(QTableView.SelectRows)
-        self.setSelectionMode(QTableView.SingleSelection)
-        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOn)
-        self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.verticalHeader().setDefaultSectionSize(signal_height)
-        self.verticalHeader().setVisible(False)
-        self.horizontalScrollBar().setFixedHeight(footer_height)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
 
-        self.setStyleSheet(
-            "QTableView           {background-color: black; color: white;}"
-        )
+        layout.addWidget(self.signal_name_column)
+        layout.addWidget(self.signal_value_column)
+        layout.addWidget(self.signal_waveform_column, 1)
+        layout.addWidget(self.signal_scrollbar)
 
-    def mouseDoubleClickEvent(self, event):
-        index = self.indexAt(event.position().toPoint())
+        self.signal_name_column.view_list_changed.connect(self._view_list_changed)
+        self.signal_scrollbar.valueChanged.connect(self._signal_scrollbar_value_changed)
 
-        if index.isValid():
-            row  = index.row()
-            item = self.view_model.row_to_item(row)
+        # 注) すぐに self.signal_name_column の描画領域(viewport)の設定が行われるとは限ら
+        # ないので、ここで self.update_visible_row_count() を実行するのではなく、
+        # 現在実行中の処理がすべて終了してから self.update_visible_row_count() を実行する.
+        # これは self.resizeEvent() の実行中でも同様
+        # self.update_visible_row_count()
+        QTimer.singleShot(0, self.update_visible_row_count)
 
-            if self.view_model.item_is_group(item):
-                self.view_model.toggle_group(item)
+    def update_signal_scrollbar(self):
+        self.signal_scrollbar.update_scroll_range()
 
-                self.table_model.refresh()
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        QTimer.singleShot(0, self.update_visible_row_count)
 
-                new_row = self.view_model.item_to_row(item)
-                if new_row is not None:
-                    new_index = self.table_model.index(
-                        new_row,
-                        self.SignalNameModel.SIGNAL_COLUMN
-                    )
-                    self.scrollTo(new_index)
+    def _view_list_changed(self):
+        self.update_visible_row_count()
+        self.signal_name_column.refresh()
+        self.signal_value_column.refresh()
+        self.signal_waveform_column.refresh()
 
-                self.view_model_changed.emit()
-                event.accept()
-                return
+    def _signal_scrollbar_value_changed(self, value):
+        self.set_row_scroll_value(value)
 
-        super().mouseDoubleClickEvent(event)
-
-    def wheelEvent(self, event):
-        window = self.window()
-        if hasattr(window, "wheel_scroll"):
-            window.wheel_scroll(event)
-            return
-        super().wheelEvent(event)
-
-    def refresh(self):
-        self.view_model.rebuild()
-        self.table_model.refresh()
+    def update_visible_row_count(self):
+        height    = self.signal_name_column.viewport().height()
+        row_count = height // self.signal_row_height
+        self.signal_name_column.set_visible_row_count(row_count)
+        self.signal_value_column.set_visible_row_count(row_count)
+        self.signal_waveform_column.set_visible_row_count(row_count)
+        self.signal_scrollbar.set_visible_row_count(row_count)
 
     def set_row_scroll_value(self, value):
-        scrollbar = self.verticalScrollBar()
-        if scrollbar.value() != value:
-            scrollbar.setValue(value)
+        self.signal_name_column.set_row_scroll_value(value)
+        self.signal_value_column.set_row_scroll_value(value)
+        self.signal_waveform_column.set_row_scroll_value(value)
 
-    def set_current_time(self, current_time):
-        self.current_time = current_time;
-        self.table_model.set_current_time(current_time)
-
-class SignalValueColumn(QTableView):
-
-    class SignalValueModel(QAbstractTableModel):
-        VALUE_COLUMN  = 0
-        COLUMN_COUNT  = 1
-
-        def __init__(self, view_model, parent=None):
-            super().__init__(parent)
-            self.view_model   = view_model
-            self.current_time = self.view_model.current_time
-
-        def columnCount(self, parent=QModelIndex()):
-            return self.COLUMN_COUNT
-
-        def rowCount(self, parent=QModelIndex()):
-            return self.view_model.row_count()
-
-        def flags(self, index):
-            return Qt.ItemIsSelectable | Qt.ItemIsEnabled
-            
-        def data(self, index, role=Qt.DisplayRole):
-            if not index.isValid():
-                return None
-
-            item = self.view_model.row_to_item(index.row())
-            if item is None:
-                return None
-
-            if role == Qt.DisplayRole:
-                if index.column() == self.VALUE_COLUMN:
-                    if self.view_model.item_is_signal(item):
-                        return self._get_value(item)
-                    else:
-                        return ""
-
-            if role == Qt.BackgroundRole:
-                if index.column() == self.VALUE_COLUMN:
-                    color = item.get_background_color("value")
-                    if color is not None:
-                        return QColor(color)
-            
-            if role == Qt.ForegroundRole:
-                if index.column() == self.VALUE_COLUMN:
-                    color = item.get_foreground_color("value")
-                    if color is not None:
-                        return QColor(color)
-            
-            return None
-
-        def headerData(self, section, orientation, role=Qt.DisplayRole):
-            if orientation != Qt.Horizontal:
-                return None
-            if role != Qt.DisplayRole:
-                return None
-            if section == self.VALUE_COLUMN:
-                return "Value"
-            return None
-
-        def _get_value(self, signal):
-            wave = signal.get_wave(self.current_time, self.current_time)
-            try:
-                return signal.format_value(next(wave)[1])
-            except StopIteration:
-                return ""
-
-        def refresh(self):
-            self.beginResetModel()
-            self.endResetModel()
-
-        def set_current_time(self, current_time):
-            self.current_time = current_time;
-            self.refresh()
-
-    def __init__(self, view_model, parent=None):
-        super().__init__(parent)
-        self.view_model  = view_model
-        self.table_model = self.SignalValueModel(view_model, self)
-        self.setModel(self.table_model)
-
-        header_height = self.view_model.get_option("header_height"     , DEFAULT_HEADER_HEIGHT)
-        signal_height = self.view_model.get_option("signal_height"     , DEFAULT_SIGNAL_HEIGHT)
-        footer_height = self.view_model.get_option("footer_height"     , DEFAULT_FOOTER_HEIGHT)
-        value_width   = self.view_model.get_option("signal_value_width", DEFAULT_SIGNAL_VALUE_WIDTH)
-
-        header = self.horizontalHeader()
-        header.setStretchLastSection(False)
-        header.setFixedHeight(header_height)
-        header.resizeSection(self.SignalValueModel.VALUE_COLUMN, value_width)
-
-        self.setSelectionBehavior(QTableView.SelectRows)
-        self.setSelectionMode(QTableView.SingleSelection)
-        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOn)
-        self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.verticalHeader().setDefaultSectionSize(signal_height)
-        self.verticalHeader().setVisible(False)
-        self.horizontalScrollBar().setFixedHeight(footer_height)
-
-        self.setStyleSheet(
-            "QTableView           {background-color: black; color: white;}"
-        )
-
-    def wheelEvent(self, event):
-        window = self.window()
-        if hasattr(window, "wheel_scroll"):
-            window.wheel_scroll(event)
-            return
-        super().wheelEvent(event)
-
-    def refresh(self):
-        self.table_model.refresh()
-
-    def set_row_scroll_value(self, value):
-        scrollbar = self.verticalScrollBar()
-        if scrollbar.value() != value:
-            scrollbar.setValue(value)
-
-    def set_current_time(self, current_time):
-        self.current_time = current_time;
-        self.table_model.set_current_time(current_time)
-
-class WaveformColumn(QWidget):
-
-    time_range_changed = Signal(int, int)
-
-    def __init__(self, view_model, parent=None):
-        super().__init__(parent)
-        self.view_model           = view_model
-        self.start_time           = self.view_model.start_time
-        self.end_time             = self.view_model.end_time
-        self.total_start_time     = self.view_model.start_time
-        self.total_end_time       = self.view_model.end_time
-        self.row_height           = self.view_model.get_option("signal_height", DEFAULT_SIGNAL_HEIGHT)
-        self.time_ruler_height    = self.view_model.get_option("header_height", DEFAULT_HEADER_HEIGHT)
-        self.scrollbar_height     = self.view_model.get_option("footer_height", DEFAULT_FOOTER_HEIGHT)
-        self.minimum_signal_width = 1000
-        self._updating_scrollbar  = False
-        self.setMinimumWidth(300)
-
-        self.time_ruler      = self.TimeRuler(self)
-        self.waveform_widget = self.WaveformWidget(self)
-        self.time_scrollbar  = QScrollBar(Qt.Horizontal, self)
+    def set_time_range(self, start_time, end_time):
+        self.signal_name_column.set_time_range(start_time, end_time)
+        self.signal_value_column.set_time_range(start_time, end_time)
+        self.signal_waveform_column.set_time_range(start_time, end_time)
         
-        self.layout = QVBoxLayout(self)
-        self.layout.setContentsMargins(0, 0, 0, 0)
-        self.layout.setSpacing(0)
-        self.layout.addWidget(self.time_ruler     , 0)
-        self.layout.addWidget(self.waveform_widget, 1)
-        self.layout.addWidget(self.time_scrollbar , 0)
+    def set_current_time(self, current_time):
+        self.signal_value_column.set_current_time(current_time)
+        self.signal_waveform_column.set_current_time(current_time)
 
-        self.time_scrollbar.setFixedHeight(self.scrollbar_height)
-        self.time_scrollbar.valueChanged.connect(self._time_scrollbar_changed)
-        self._update_scrollbar()
+    def scroll_rows(self, delta):
+        scrollbar = self.signal_scrollbar
+        value     = scrollbar.value() + delta
+        value     = max(scrollbar.minimum(), min(scrollbar.maximum(), value))
+        scrollbar.setValue(value)
 
-    class CursorWidget(QWidget):
+    class SignalNameColumn(QTableView):
+        "View_List クラスで指定されている各信号の名称を表示するクラス"
+        
+        view_list_changed = Signal()
+
         def __init__(self, parent=None):
             super().__init__(parent)
-            self.x = 0
-            self.setAttribute(Qt.WA_TransparentForMouseEvents)
-            self.setAttribute(Qt.WA_TranslucentBackground)
+            self.parent       = parent
+            self.view_list    = self.parent.view_list
+            self.row_height   = self.parent.signal_row_height
+            self.table_model  = self.SignalNameModel(self)
+            self.setModel(self.table_model)
 
-        def set_x(self, x):
-            self.x = x
-            self.update()
+            self.setSelectionBehavior(QTableView.SelectRows)
+            self.setSelectionMode(QTableView.SingleSelection)
 
-        def paintEvent(self, event):
-            painter = QPainter(self)
-            pen = QPen(QColor("yellow"))
-            pen.setWidth(1)
-            painter.setPen(pen)
-            painter.drawLine(
-                self.x, 0,
-                self.x, self.height()
-            )
+            h_header = self.horizontalHeader()
+            h_header.setSectionResizeMode(0,QHeaderView.ResizeMode.Stretch)
+            h_header.setVisible(False)
+            self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
             
-    class WaveformWidget(QWidget):
-        def __init__(self, parent=None):
-            super().__init__(parent)
-            self.parent           = parent
-            self.view_model       = self.parent.view_model
-            self.start_time       = self.parent.start_time
-            self.end_time         = self.parent.end_time
-            self.row_scroll_value = 0
-            self.background_color = self.view_model.get_option("color")["wave"]["background"]
+            v_header = self.verticalHeader()
+            v_header.setVisible(False)
+            v_header.setSectionResizeMode(QHeaderView.Fixed)
+            v_header.setDefaultSectionSize(self.row_height)
+            self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
 
-            self.setMouseTracking(True)
-            self.cursor_widget    = self.parent.CursorWidget(self)
-            self.cursor_widget.setGeometry(self.rect())
-            self.cursor_widget.raise_()
+        def mouseDoubleClickEvent(self, event):
+            index = self.indexAt(event.position().toPoint())
+
+            if index.isValid():
+                row  = index.row()
+                item = self.view_list.row_to_item(row)
+
+                if self.view_list.item_is_group(item):
+                    self.view_list.toggle_group(item)
+
+                    self.table_model.refresh()
+
+                    new_row = self.view_list.item_to_row(item)
+                    if new_row is not None:
+                        new_index = self.table_model.index(
+                            new_row,
+                            self.SignalNameModel.SIGNAL_COLUMN
+                        )
+                        self.scrollTo(new_index)
+
+                    self.view_list_changed.emit()
+                    event.accept()
+                    return
+
+            super().mouseDoubleClickEvent(event)
+
+        def wheelEvent(self, event):
+            delta_y = event.angleDelta().y()
+            if   delta_y > 0:
+                self.parent.scroll_rows(-1)
+            elif delta_y < 0:
+                self.parent.scroll_rows( 1)
+            event.accept()
+
+        def refresh(self):
+            self.view_list.rebuild()
+            self.table_model.refresh()
+
+        def set_visible_row_count(self, value):
+            pass
 
         def set_time_range(self, start_time, end_time):
+            pass
+        
+        def set_row_scroll_value(self, value):
+            scrollbar = self.verticalScrollBar()
+            if scrollbar.value() != value:
+                scrollbar.setValue(value)
+
+        class SignalNameModel(QAbstractTableModel):
+            SIGNAL_COLUMN = 0
+            COLUMN_COUNT  = 1
+
+            def __init__(self, parent=None):
+                super().__init__(parent)
+                self.view_list = parent.view_list
+
+            def columnCount(self, parent=QModelIndex()):
+                return self.COLUMN_COUNT
+
+            def rowCount(self, parent=QModelIndex()):
+                return self.view_list.row_count()
+
+            def flags(self, index):
+                return Qt.ItemIsSelectable | Qt.ItemIsEnabled
+            
+            def data(self, index, role=Qt.DisplayRole):
+                if not index.isValid():
+                    return None
+
+                item = self.view_list.row_to_item(index.row())
+                if item is None:
+                    return None
+
+                if role == Qt.DisplayRole:
+                    if index.column() == self.SIGNAL_COLUMN:
+                        if self.view_list.item_is_group(item):
+                            if item.expanded:
+                                mark = "\u25bc"
+                            else:
+                                mark = "\u25b6"
+                        else:
+                                mark = "\u3000"
+                        indent = " " * ((item.depth-1)*2)
+                        return indent + mark + " " + item.display_name
+
+                if role == Qt.BackgroundRole:
+                    if index.column() == self.SIGNAL_COLUMN:
+                        color = item.get_background_color("name")
+                        if color is not None:
+                            return QColor(color)
+            
+                if role == Qt.ForegroundRole:
+                    if index.column() == self.SIGNAL_COLUMN:
+                        color = item.get_foreground_color("name")
+                        if color is not None:
+                            return QColor(color)
+            
+                return None
+
+            def headerData(self, section, orientation, role=Qt.DisplayRole):
+                if orientation != Qt.Horizontal:
+                    return None
+                if role != Qt.DisplayRole:
+                    return None
+                if section == self.SIGNAL_COLUMN:
+                    return "Signal Name"
+                return None
+
+            def refresh(self):
+                self.beginResetModel()
+                self.endResetModel()
+
+    class SignalValueColumn(QTableView):
+        "View_List クラスで指定されている各信号の値を表示するクラス"
+
+        def __init__(self, parent=None):
+            super().__init__(parent)
+            self.parent          = parent
+            self.view_list       = self.parent.view_list
+            self.time_controller = self.parent.time_controller
+            self.row_height      = self.parent.signal_row_height
+            self.table_model     = self.SignalValueModel(self)
+            self.setModel(self.table_model)
+
+            self.setSelectionBehavior(QTableView.SelectRows)
+            self.setSelectionMode(QTableView.SingleSelection)
+
+            h_header = self.horizontalHeader()
+            h_header.setSectionResizeMode(0,QHeaderView.ResizeMode.Stretch)
+            h_header.setVisible(False)
+            self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+            
+            v_header = self.verticalHeader()
+            v_header.setVisible(False)
+            v_header.setSectionResizeMode(QHeaderView.Fixed)
+            v_header.setDefaultSectionSize(self.row_height)
+            self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+
+        def refresh(self):
+            self.table_model.refresh()
+
+        def set_visible_row_count(self, value):
+            pass
+
+        def set_time_range(self, start_time, end_time):
+            pass
+
+        def set_row_scroll_value(self, value):
+            scrollbar = self.verticalScrollBar()
+            if scrollbar.value() != value:
+                scrollbar.setValue(value)
+
+        def set_current_time(self, current_time):
+            self.table_model.set_current_time(current_time)
+        
+        def wheelEvent(self, event):
+            delta_y = event.angleDelta().y()
+            if   delta_y > 0:
+                self.parent.scroll_rows(-1)
+            elif delta_y < 0:
+                self.parent.scroll_rows( 1)
+            event.accept()
+
+        class SignalValueModel(QAbstractTableModel):
+            VALUE_COLUMN  = 0
+            COLUMN_COUNT  = 1
+
+            def __init__(self, parent=None):
+                super().__init__(parent)
+                self.view_list       = parent.view_list
+                self.time_controller = parent.time_controller
+                self.current_time    = self.time_controller.current_time
+
+            def columnCount(self, parent=QModelIndex()):
+                return self.COLUMN_COUNT
+
+            def rowCount(self, parent=QModelIndex()):
+                return self.view_list.row_count()
+
+            def flags(self, index):
+                return Qt.ItemIsSelectable | Qt.ItemIsEnabled
+            
+            def data(self, index, role=Qt.DisplayRole):
+                if not index.isValid():
+                    return None
+
+                item = self.view_list.row_to_item(index.row())
+                if item is None:
+                    return None
+
+                if role == Qt.DisplayRole:
+                    if index.column() == self.VALUE_COLUMN:
+                        if self.view_list.item_is_signal(item):
+                            return self._get_value(item)
+                        else:
+                            return ""
+
+                if role == Qt.BackgroundRole:
+                    if index.column() == self.VALUE_COLUMN:
+                        color = item.get_background_color("value")
+                        if color is not None:
+                            return QColor(color)
+            
+                if role == Qt.ForegroundRole:
+                    if index.column() == self.VALUE_COLUMN:
+                        color = item.get_foreground_color("value")
+                        if color is not None:
+                            return QColor(color)
+            
+                return None
+
+            def headerData(self, section, orientation, role=Qt.DisplayRole):
+                if orientation != Qt.Horizontal:
+                    return None
+                if role != Qt.DisplayRole:
+                    return None
+                if section == self.VALUE_COLUMN:
+                    return "Value"
+                return None
+
+            def _get_value(self, signal):
+                wave = signal.get_wave(self.current_time, self.current_time)
+                try:
+                    return signal.format_value(next(wave)[1])
+                except StopIteration:
+                    return ""
+
+            def refresh(self):
+                self.beginResetModel()
+                self.endResetModel()
+
+            def set_current_time(self, current_time):
+                if self.current_time != current_time:
+                    self.current_time = current_time
+                    self.refresh()
+
+    class SignalWaveformColumn(QWidget):
+        def __init__(self, parent=None):
+            super().__init__(parent)
+            self.parent             = parent
+            self.view_list          = self.parent.view_list
+            self.time_controller    = self.parent.time_controller
+            self.start_time         = self.time_controller.start_time
+            self.end_time           = self.time_controller.end_time
+            self.visible_row_count  = self.parent.visible_row_count
+            self.row_scroll_value   = 0
+            self.background_color   = self.view_list.get_color("wave", "background", "black")
+
+        def refresh(self):
+            self.update()
+
+        def set_time_range(self, start_time, end_time):
+            if start_time == self.start_time and end_time == self.end_time:
+                return
             self.start_time = start_time
             self.end_time   = end_time
+            self.update()
+
+        def set_current_time(self, current_time):
+            pass
+
+        def set_visible_row_count(self, value):
+            if self.visible_row_count == value:
+                return
+            self.visible_row_count = value
             self.update()
 
         def set_row_scroll_value(self, value):
@@ -375,31 +423,26 @@ class WaveformColumn(QWidget):
             self.row_scroll_value = value
             self.update()
 
-        def mouseMoveEvent(self, event):
-            x = event.position().x()
-            self.cursor_widget.set_x(x)
-
-        def resizeEvent(self, event):
-            super().resizeEvent(event)
-            self.cursor_widget.setGeometry(self.rect())
-            self.cursor_widget.raise_()
-            
         def time_to_x(self, time):
-            if self.end_time == self.start_time:
+            start_time = self.time_controller.start_time
+            end_time   = self.time_controller.end_time
+            if end_time == start_time:
                 return 0
-            return int((time - self.start_time) * self.width() / (self.end_time - self.start_time))
+            return int((time - start_time) * self.width() / (end_time - start_time))
 
         def x_to_time(self, x):
+            start_time = self.time_controller.start_time
+            end_time   = self.time_controller.end_time
             if self.width() <= 0:
-                return self.start_time
+                return start_time
             x = max(0, min(self.width(), x))
             ratio = x / self.width()
-            return self.start_time + ratio * (self.end_time - self.start_time)
+            return int(start_time + ratio * (end_time - start_time))
         
         def paintEvent(self, event):
             painter      = QPainter(self)
-            start_time   = self.start_time
-            end_time     = self.end_time
+            start_time   = self.time_controller.start_time
+            end_time     = self.time_controller.end_time
 
             painter.fillRect(self.rect(), self.background_color)
             if end_time <= start_time:
@@ -407,11 +450,11 @@ class WaveformColumn(QWidget):
             
             width        = self.width()
             height       = self.height()
-            row_height   = self.parent.row_height
+            row_height   = self.parent.signal_row_height
             first_row    = self.row_scroll_value
-            row_count    = self.view_model.row_count()
-            edge_slop    = self.view_model.get_option("edge_slop", 0)
-            visible_rows = height // row_height
+            row_count    = self.view_list.row_count()
+            edge_slope   = self.view_list.model.get_option("edge_slope", 0)
+            visible_rows = self.visible_row_count
 
             def draw_background():
                 for i in range(visible_rows):
@@ -420,7 +463,7 @@ class WaveformColumn(QWidget):
                         break
                     y     = i * row_height
                     rect  = QRect(0, y, width, row_height)
-                    item  = self.view_model.row_to_item(row)
+                    item  = self.view_list.row_to_item(row)
                     color = item.get_background_color("wave")
                     if color is not None:
                         painter.fillRect(rect, QColor(color))
@@ -439,6 +482,10 @@ class WaveformColumn(QWidget):
                 bottom = y + row_height - 5
                 height = bottom - top
 
+                edge_slope_width     = edge_slope
+                edge_slope_threshold = edge_slope_width*3
+                edge_slope_enabled   = (edge_slope_width != 0)
+
                 def draw_signal_value(signal, value, left, width):
                     value_text   = str(signal.format_value(value))
                     value_color  = signal.get_color("wave", "value")
@@ -455,6 +502,7 @@ class WaveformColumn(QWidget):
                         painter.drawText(draw_rect, align_flag, value_text)
                     
                 def draw_signal_logic(signal, curr_value, prev_value, left, right):
+                    nonlocal edge_slope_enabled
                     width        = right - left
                     signal_color = signal.get_color("wave", "signal")
                     pen = QPen(QColor(signal_color))
@@ -469,20 +517,22 @@ class WaveformColumn(QWidget):
                         prev_level = top
                     else:
                         prev_level = bottom
-                    if curr_value != prev_value and edge_slop != 0 and edge_slop < width:
-                        left_e = left + edge_slop
-                        painter.drawLine(left  , prev_level, left_e, curr_level)
-                        painter.drawLine(left_e, curr_level, right , curr_level)
+                    if curr_value != prev_value and edge_slope_enabled and width > edge_slope_threshold:
+                        draw_left  = left + edge_slope_width
+                        painter.drawLine(left     , prev_level, draw_left, curr_level)
+                        painter.drawLine(draw_left, curr_level, right    , curr_level)
                     else:
-                        painter.drawLine(left  , curr_level, right , curr_level)
+                        painter.drawLine(left     , prev_level, left     , curr_level)
+                        painter.drawLine(left     , curr_level, right    , curr_level)
+                        edge_slope_enabled = ((edge_slope_width == 0) and (width > edge_slope_threshold))
                         
                 def draw_signal_bus(signal, curr_value, prev_value, left, right):
                     width            = right - left
                     background_color = signal.get_color("wave", "background")
-                    signal_color     = signal.get_color("wave", "signal")
+                    signal_color     = signal.get_color("wave", "signal"    )
                     signal_pen       = QPen(QColor(signal_color))
-                    if curr_value != prev_value and edge_slop != 0 and edge_slop < width:
-                        draw_left  = left  + edge_slop
+                    if curr_value != prev_value and edge_slope_enabled and width > edge_slope_threshold:
+                        draw_left  = left  + edge_slope_width
                         draw_width = right - draw_left
                         draw_rect  = QRect(draw_left, top, draw_width, height)
                         painter.fillRect(draw_rect, QColor(background_color))
@@ -539,14 +589,14 @@ class WaveformColumn(QWidget):
                     if row >= row_count:
                         break
                     y     = i * row_height
-                    item  = self.view_model.row_to_item(row)
-                    if self.view_model.item_is_group(item):
+                    item  = self.view_list.row_to_item(row)
+                    if self.view_list.item_is_group(item):
                         draw_group(item, y)
-                    if self.view_model.item_is_signal(item):
+                    if self.view_list.item_is_signal(item):
                         draw_signal(item, y)
 
             def draw_grid():
-                time_range = self.end_time - self.start_time
+                time_range = end_time - start_time
                 tick_count = 10
                 tick_step  = time_range / tick_count
                 pen = QPen(Qt.gray)
@@ -555,7 +605,7 @@ class WaveformColumn(QWidget):
                 painter.setPen(pen)
                 
                 for i in range(tick_count + 1):
-                    time = self.start_time + i * tick_step
+                    time = start_time + i * tick_step
                     x = self.time_to_x(time)
                     painter.drawLine(x, 0, x, height)
 
@@ -563,212 +613,265 @@ class WaveformColumn(QWidget):
             draw_grid()
             draw_foreground()
 
+    class SignalScrollBar(QScrollBar):
+        def __init__(self, parent=None):
+            super().__init__(Qt.Vertical, parent)
+            self.parent            = parent
+            self.view_list         = self.parent.view_list
+            self.visible_row_count = 0
+
+        def set_visible_row_count(self, value):
+            self.visible_row_count = value
+            self.update_scroll_range()
+
+        def update_scroll_range(self):
+            total_rows = self.view_list.row_count()
+            maximum    = max(0, total_rows - self.visible_row_count)
+            self.setMinimum(0)
+            self.setMaximum(maximum)
+            self.setPageStep(self.visible_row_count)
+            self.setSingleStep(1)
+
+class WaveformArea(QWidget):
+    "複数のView_List クラスで指定されている各信号の名称、値、波形を表示するエリア"
+    "ただし、現バージョンでは一つだけしか表示していない"
+    def __init__(self, view_model, parent=None):
+        super().__init__(parent)
+        self.parent                 = parent
+        self.view_model             = view_model
+        self.time_controller        = self.parent.time_controller
+        self.signal_name_width      = self.parent.signal_name_width
+        self.signal_value_width     = self.parent.signal_value_width
+        self.signal_scrollbar_width = self.parent.signal_scrollbar_width
+        self.visible_row_count      = self.parent.visible_row_count
+        self.signal_row_height      = self.parent.signal_row_height
+        self.waveform_list          = []
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        for view_list in self.view_model.view_lists():
+            waveform = WaveformSignals(view_list, self)
+            self.waveform_list.append(waveform)
+            layout.addWidget(waveform, 0)
+
+    def set_time_range(self, start_time, end_time):
+        for view_list in self.waveform_list:
+            view_list.set_time_range(start_time, end_time)
+
+    def set_current_time(self, current_time):
+        for view_list in self.waveform_list:
+            view_list.set_current_time(current_time)
+        self.marker_widget.set_current_time(current_time)
+        self.cursor_widget.set_current_time(current_time)
+
+class HeaderArea(QWidget):
+    def __init__(self, view_model, parent=None):
+        super().__init__(parent)
+        self.parent                 = parent
+        self.view_model             = view_model
+        self.time_controller        = self.parent.time_controller
+        self.signal_name_width      = self.parent.signal_name_width
+        self.signal_value_width     = self.parent.signal_value_width
+        self.signal_scrollbar_width = self.parent.signal_scrollbar_width
+        self.height                 = self.view_model.get_option("header_height",
+                                      DEFAULT_HEADER_HEIGHT)
+        self.signal_name_column     = QLabel("Signal Name", self)
+        self.signal_value_column    = QLabel("Value", self)
+        self.time_ruler             = self.TimeRuler(self)
+        self.padding_space          = QLabel("", self)
+
+        self.signal_name_column.setFixedWidth(self.signal_name_width)
+        self.signal_name_column.setFixedHeight(self.height)
+        self.signal_name_column.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        self.signal_value_column.setFixedWidth(self.signal_value_width)
+        self.signal_value_column.setFixedHeight(self.height)
+        self.signal_value_column.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        self.time_ruler.setFixedHeight(self.height)
+
+        self.padding_space.setFixedWidth(self.signal_scrollbar_width)
+        self.padding_space.setFixedHeight(self.height)
+        self.padding_space.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        background_color = self.view_model.get_color("header", "background", "black")
+        foreground_color = self.view_model.get_color("header", "foreground", "white")
+        for column in (self.signal_name_column,
+                       self.signal_value_column,
+                       self.padding_space):
+            column.setAutoFillBackground(True)
+            palette = column.palette()
+            palette.setColor(QPalette.ColorRole.Window    , QColor(background_color))
+            palette.setColor(QPalette.ColorRole.WindowText, QColor(foreground_color))
+            column.setPalette(palette)
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        layout.addWidget(self.signal_name_column)
+        layout.addWidget(self.signal_value_column)
+        layout.addWidget(self.time_ruler, 1)
+        layout.addWidget(self.padding_space)
+
+    def set_time_range(self, start_time, end_time):
+        self.time_ruler.set_time_range(start_time, end_time)
+    
+    def set_current_time(self, current_time):
+        pass
 
     class TimeRuler(QWidget):
         def __init__(self, parent=None):
             super().__init__(parent)
             self.parent           = parent
             self.view_model       = self.parent.view_model
-            self.start_time       = self.parent.start_time
-            self.end_time         = self.parent.end_time
-            self.setMinimumHeight(self.parent.time_ruler_height)
-            self.setMaximumHeight(self.parent.time_ruler_height)
-            self.setStyleSheet(
-                "background-color: black;"
-            )
+            self.time_controller  = self.parent.time_controller
+            self.background_color = self.view_model.get_color("time_ruler", "background", "black")
+            self.line_color       = self.view_model.get_color("time_ruler", "line"      , "gray" )
+            self.text_color       = self.view_model.get_color("time_ruler", "text"      , "white")
 
         def set_time_range(self, start_time, end_time):
-            self.start_time = start_time
-            self.end_time   = end_time
             self.update()
 
         def paintEvent(self, event):
+            start_time = self.time_controller.start_time
+            end_time   = self.time_controller.end_time
+            
             painter = QPainter(self)
-            painter.fillRect(self.rect(), Qt.black )
+            painter.fillRect(self.rect(), QColor(self.background_color))
 
             width  = self.width()
             height = self.height()
 
-            painter.setPen(QPen(Qt.gray))
+            painter.setPen(QPen(QColor(self.line_color)))
             painter.drawLine(0, height - 1, width, height - 1)
 
-            if self.end_time <= self.start_time:
+            if end_time <= start_time:
                 return
 
-            time_range = self.end_time - self.start_time
+            time_range = end_time - start_time
 
             tick_count = 10
             tick_step = time_range / tick_count
 
             for i in range(tick_count + 1):
-                time = self.start_time + i * tick_step
-                x = int((time - self.start_time) / time_range * width)
-                painter.setPen(QPen(Qt.gray))
+                time = start_time + i * tick_step
+                x = int((time - start_time) / time_range * width)
+                painter.setPen(QPen(QColor(self.line_color)))
                 painter.drawLine(x, height - 8, x, height)
 
                 text = str(self.view_model.format_timestamp(time))
-                painter.setPen(QPen(Qt.white))
+                painter.setPen(QPen(QColor(self.text_color)))
                 fm = painter.fontMetrics()
                 text_width = fm.horizontalAdvance(text)
                 painter.drawText(x - text_width // 2, 15, text)
 
-    def wheelEvent(self, event):
-        window = self.window()
-        if hasattr(window, "wheel_scroll"):
-            window.wheel_scroll(event)
-            return
-        super().wheelEvent(event)
+class FooterArea(QWidget):
+    def __init__(self, view_model, parent=None):
+        super().__init__(parent)
+        self.parent                 = parent
+        self.view_model             = view_model
+        self.time_controller        = self.parent.time_controller
+        self.signal_name_width      = self.parent.signal_name_width
+        self.signal_value_width     = self.parent.signal_value_width
+        self.signal_scrollbar_width = self.parent.signal_scrollbar_width
+        self.height                 = self.view_model.get_option("footer_height",
+                                      DEFAULT_FOOTER_HEIGHT)
+        self.signal_name_scrollbar  = self.SignalNameScrollBar(self)
+        self.signal_value_scrollbar = self.SignalValueScrollBar(self)
+        self.time_range_scrollbar   = self.TimeRangeScrollBar(self)
+        self.padding_space          = QLabel("", self)
 
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        total_height = self.height()
-        available_height = total_height - (self.time_ruler_height + self.scrollbar_height)
-        if available_height < self.row_height:
-            row_count = 1
-        else:
-            row_count = available_height // self.row_height
-        wave_widget_height    = row_count * self.row_height
-        width                 = self.width()
-        time_ruler_y_pos      = 0
-        waveform_widget_y_pos = time_ruler_y_pos      + self.time_ruler_height
-        time_scrollbar_y_pos  = waveform_widget_y_pos + wave_widget_height
-        self.time_ruler.setGeometry(     0, time_ruler_y_pos     , width, self.time_ruler_height)
-        self.waveform_widget.setGeometry(0, waveform_widget_y_pos, width, wave_widget_height    )
-        self.time_scrollbar.setGeometry( 0, time_scrollbar_y_pos , width, self.scrollbar_height )
-        
-    def set_row_scroll_value(self, value):
-        self.waveform_widget.set_row_scroll_value(value)
+        self.signal_name_scrollbar.setFixedWidth(self.signal_name_width)
+        self.signal_name_scrollbar.setFixedHeight(self.height)
+
+        self.signal_value_scrollbar.setFixedWidth(self.signal_value_width)
+        self.signal_value_scrollbar.setFixedHeight(self.height)
+
+        self.time_range_scrollbar.setFixedHeight(self.height)
+
+        self.padding_space.setFixedWidth(self.signal_scrollbar_width)
+        self.padding_space.setFixedHeight(self.height)
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        layout.addWidget(self.signal_name_scrollbar)
+        layout.addWidget(self.signal_value_scrollbar)
+        layout.addWidget(self.time_range_scrollbar, 1)
+        layout.addWidget(self.padding_space)
 
     def set_time_range(self, start_time, end_time):
-        if start_time > end_time:
-            start_time, end_time = end_time, start_time
-        start_time = max(self.total_start_time, start_time)
-        end_time   = min(self.total_end_time  , end_time  )
-        if start_time >= end_time:
-            return
+        self.time_range_scrollbar.set_time_range(start_time, end_time)
 
-        changed = (
-            self.start_time != start_time or
-            self.end_time   != end_time
-        )
-        self.start_time = start_time
-        self.end_time   = end_time
+    def change_time_range(self, start_time, end_time):
+        self.time_controller.change_time_range(start_time, end_time)
 
-        self._update_scrollbar()
-        self.waveform_widget.set_time_range(start_time, end_time)
-        self.time_ruler.set_time_range(start_time, end_time)
+    def set_current_time(self, current_time):
+        pass
 
-        if changed:
-            self.time_range_changed.emit(
-                self.start_time,
-                self.end_time
-            )
+    class SignalNameScrollBar(QScrollBar):
+        def __init__(self, parent=None):
+            super().__init__(Qt.Horizontal, parent)
+            self.parent          = parent
+            self.view_model      = self.parent.view_model
+            self.time_controller = self.parent.time_controller
+            
+    class SignalValueScrollBar(QScrollBar):
+        def __init__(self, parent=None):
+            super().__init__(Qt.Horizontal, parent)
+            self.parent          = parent
+            self.view_model      = self.parent.view_model
+            self.time_controller = self.parent.time_controller
+            
+    class TimeRangeScrollBar(QScrollBar):
+        SCROLL_SCALE = 1000000
+        def __init__(self, parent=None):
+            super().__init__(Qt.Horizontal, parent)
+            self.parent           = parent
+            self.view_model       = self.parent.view_model
+            self.time_controller  = self.parent.time_controller
+            self.time_quantum     = self.time_controller.time_quantum
+            self.start_time       = None
+            self.end_time         = None
+            self.valueChanged.connect(self.on_value_changed)
+            start_time = self.time_controller.start_time
+            end_time   = self.time_controller.end_time
+            self.set_time_range(start_time, end_time)
 
-    def set_total_time_range(self, start_time, end_time):
-        self.total_start_time = start_time
-        self.total_end_time   = end_time
-
-        self.start_time = start_time
-        self.end_time   = end_time
-
-        self._update_scrollbar()
-        self.waveform_widget.set_time_range(start_time, end_time)
-        self.time_ruler.set_time_range(start_time, end_time)
-
-    def time_range(self):
-        return self.start_time, self.end_time
-
-    def display_time(self):
-        return self.end_time - self.start_time
-
-    def total_time(self):
-        return self.total_end_time - self.total_start_time
-
-    def _update_scrollbar(self):
-        if self._updating_scrollbar:
-            return
-
-        self._updating_scrollbar = True
-
-        try:
-            total = self.total_time()
-            visible = self.display_time()
-
-            if total <= 0:
-                self.time_scrollbar.setEnabled(False)
+        def set_time_range(self, start_time, end_time):
+            if start_time == self.start_time and end_time == self.end_time:
                 return
-
-            if visible >= total:
-                self.time_scrollbar.setEnabled(False)
-                self.time_scrollbar.setMinimum(0)
-                self.time_scrollbar.setMaximum(0)
-                self.time_scrollbar.setValue(0)
-                return
-
-            self.time_scrollbar.setEnabled(True)
-
-            maximum = total - visible
-
-            self.time_scrollbar.setMinimum(0)
-            self.time_scrollbar.setMaximum(maximum)
-
-            value = self.start_time - self.total_start_time
-
-            value = max(0, min(value, maximum))
-
-            self.time_scrollbar.setPageStep(visible)
-            self.time_scrollbar.setValue(value)
-
-        finally:
-            self._updating_scrollbar = False
-
-    def _time_scrollbar_changed(self, value):
-        if self._updating_scrollbar:
-            return
-
-        visible = self.display_time()
-
-        start_time = self.total_start_time + value
-        end_time   = start_time + visible
-
-        if end_time > self.total_end_time:
-            end_time = self.total_end_time
-            start_time = end_time - visible
-
-        changed = (
-            self.start_time != start_time or
-            self.end_time   != end_time
-        )
-
-        self.start_time = start_time
-        self.end_time   = end_time
-
-        self.waveform_widget.update()
-
-        if changed:
-            self.time_range_changed.emit(
-                self.start_time,
-                self.end_time
-            )
-
-    def refresh(self):
-        self.waveform_widget.update()
-
-    def row_count(self):
-        if not hasattr(self, "view_model"):
-            return 0
-
-        return self.view_model.row_count()
+            self.start_time   = start_time
+            self.end_time     = end_time
+            total_start_time  = (self.time_controller.total_start_time) // self.time_quantum
+            total_end_time    = (self.time_controller.total_end_time  ) // self.time_quantum
+            total_time_range  = total_end_time - total_start_time
+            view_start_time   = (self.start_time) // self.time_quantum
+            view_end_time     = (self.end_time  ) // self.time_quantum
+            view_time_range   = view_end_time - view_start_time
+            self.blockSignals(True)
+            self.setMinimum(total_start_time)
+            self.setMaximum(total_end_time - view_time_range)
+            self.setPageStep(view_time_range)
+            self.setValue(view_start_time)
+            self.blockSignals(False)
+            
+        def on_value_changed(self, value):
+            time_range = self.end_time - self.start_time
+            start_time = value * self.time_quantum
+            end_time   = start_time + time_range
+            self.time_controller.change_time_range(start_time, end_time)
 
 class WaveformWindow(QMainWindow):
 
     def __init__(self, view_model, parent=None):
         super().__init__(parent)
-
-        self.view_model   = view_model
-        self.start_time   = self.view_model.start_time
-        self.end_time     = self.view_model.end_time
-        self.current_time = self.view_model.current_time
+        self.view_model      = view_model
+        self.time_controller = self.TimeController(self)
 
         self.setWindowTitle("FST Wave Viewer")
         self.resize(1200, 700)
@@ -776,71 +879,90 @@ class WaveformWindow(QMainWindow):
         central_widget = QWidget(self)
         self.setCentralWidget(central_widget)
 
-        layout = QHBoxLayout(central_widget)
+        layout = QVBoxLayout(central_widget)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        self.name_column  = SignalNameColumn(self.view_model, central_widget)
-        self.name_column.setFixedWidth(
-            self.view_model.get_option("signal_name_width", DEFAULT_SIGNAL_NAME_WIDTH))
-        layout.addWidget(self.name_column , 0)
+        self.signal_name_width      = self.view_model.get_option("signal_name_width" ,
+                                      DEFAULT_SIGNAL_NAME_WIDTH)
+        self.signal_value_width     = self.view_model.get_option("signal_value_width",
+                                      DEFAULT_SIGNAL_VALUE_WIDTH)
+        self.signal_row_height      = self.view_model.get_option("signal_height"     ,
+                                      DEFAULT_SIGNAL_HEIGHT)
+        self.signal_scrollbar_width = DEFAULT_SCROLLBAR_WIDTH
+        self.visible_row_count      = self.view_model.get_option("display_rows"      ,
+                                      DEFAULT_DISPLAY_ROW_COUNT)
 
-        self.value_column = SignalValueColumn(self.view_model, central_widget)
-        self.value_column.setFixedWidth(
-            self.view_model.get_option("signal_value_width", DEFAULT_SIGNAL_VALUE_WIDTH))
-        layout.addWidget(self.value_column, 0)
+        self.header_area            = HeaderArea(self.view_model,self)
+        self.signal_waveform_area   = WaveformArea(self.view_model,self)
+        self.footer_area            = FooterArea(self.view_model,self)
 
-        self.wave_column  = WaveformColumn(self.view_model, central_widget)
-        layout.addWidget(self.wave_column , 1)
+        layout.addWidget(self.header_area         , 0)
+        layout.addWidget(self.signal_waveform_area, 0)
+        layout.addWidget(self.footer_area         , 0)
 
-        self.scrollbar    = QScrollBar(Qt.Vertical, central_widget)
-        layout.addWidget(self.scrollbar   , 2)
+    def set_time_range(self, start_time, end_time):
+        self.start_time = start_time
+        self.end_time   = end_time
+        self.signal_waveform_area.set_time_range(self.start_time, self.end_time)
+        self.header_area.set_time_range(self.start_time, self.end_time)
+        self.footer_area.set_time_range(self.start_time, self.end_time)
 
-        self.name_column.view_model_changed.connect(self._view_model_changed)
-        self.scrollbar.valueChanged.connect(self._scrollbar_value_changed)
+    def set_current_time(self, current_time):
+        self.current_time = current_time
+        self.signal_waveform_area.set_current_time(self.current_time)
+        self.header_area.set_current_time(self.current_time)
+        self.footer_area.set_current_time(self.current_time)
+        
+    class TimeController:
+        def __init__(self, parent=None):
+            self.parent                 = parent
+            self.view_model             = self.parent.view_model
+            self.time_quantum           = self.view_model.time_quantum
+            self.start_time             = self.align_time(   self.view_model.start_time)
+            self.end_time               = self.align_time_up(self.view_model.end_time  )
+            self.total_start_time       = self.align_time(   self.view_model.start_time)
+            self.total_end_time         = self.align_time_up(self.view_model.end_time  )
+            self.current_time           = self.view_model.current_time
+            self.change_time_range_busy = False
 
-        # 注) すぐに self.name_column の verticalScrollBar() の設定が行われるとは限らないので
-        # ここで self._update_vertical_scrollbar() を実行するのではなく、
-        # 現在実行中の処理がすべて終了してから self._update_vertical_scrollbar() を実行する.
-        # self._update_vertical_scrollbar()
-        QTimer.singleShot(0, self._update_vertical_scrollbar)
+        def align_time(self, time):
+            quantum = self.time_quantum
+            return int((time // quantum) * quantum)
 
-    def _update_vertical_scrollbar(self):
-        signal_scrollbar = self.name_column.verticalScrollBar()
-        self.scrollbar.setMinimum(   signal_scrollbar.minimum()   )
-        self.scrollbar.setMaximum(   signal_scrollbar.maximum()   )
-        self.scrollbar.setPageStep(  signal_scrollbar.pageStep()  )
-        self.scrollbar.setSingleStep(signal_scrollbar.singleStep())
-        self.scrollbar.setValue(     signal_scrollbar.value()     )
+        def align_time_up(self, time):
+            quantum = self.time_quantum
+            return int(((time + quantum - 1) // quantum) * quantum)
+        
+        def change_time_range(self, start_time, end_time):
+            if self.change_time_range_busy:
+                return
+            self.change_time_range_busy = True
+            total_start_time = self.total_start_time
+            total_end_time   = self.total_end_time
+            time_range       = end_time - start_time
+            if time_range <= 0:
+                return
+            if   start_time < total_start_time:
+                start_time = total_start_time
+                end_time   = start_time + time_range
+            elif end_time   > total_end_time:
+                end_time   = total_end_time
+                start_time = end_time   - time_range
+            start_time = self.align_time(   max(total_start_time, start_time))
+            end_time   = self.align_time_up(min(total_end_time  , end_time  ))
+            self.start_time = start_time
+            self.end_time   = end_time
+            self.parent.set_time_range(start_time, end_time)
+            QTimer.singleShot(0, self.change_time_range_finished)
 
-    def _view_model_changed(self):
-        self._update_vertical_scrollbar()
-        self.name_column.refresh()
-        self.value_column.refresh()
-        self.wave_column.refresh()
+        def change_time_range_finished(self):
+            self.change_time_range_busy = False
 
-    def _scrollbar_value_changed(self, value):
-        self.name_column.set_row_scroll_value(value)
-        self.value_column.set_row_scroll_value(value)
-        self.wave_column.set_row_scroll_value(value)
-
-    def wheel_scroll(self, event):
-        delta = event.angleDelta().y()
-        if delta == 0:
-            event.ignore()
-            return
-        steps = delta // 120
-        if steps == 0:
-            steps = 1 if delta > 0 else -1
-        value = self.scrollbar.value() - steps
-        value = max(self.scrollbar.minimum(), min(value, self.scrollbar.maximum()))
-        self.scrollbar.setValue(value)
-        event.accept()
-
-    def resizeEvent(self,event):
-        super().resizeEvent(event)
-        self._update_vertical_scrollbar()
-    
+        def change_current_time(self, current_time):
+            self.current_time = current_time
+            self.parent.set_current_time(current_time)
+        
 def load_config(config_file, file_name):
     namespace = {
         "FST_Wave_View_Model": FST_Wave_View_Model,
