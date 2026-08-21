@@ -359,26 +359,37 @@ class FST_Wave_View_Model:
         def get_option(self, key, default_value=None):
             return self.option.get(key, default_value)
         
+        def get_color(self, key, prop=None, default_value=None):
+            color = self.get_option("color", {})
+            return color.get(key,{}).get(prop, default_value)
+
     DEFAULT_OPTION = {
-        "header_height"      : 24   ,
-        "footer_height"      : 24   ,
-        "signal_height"      : 24   ,
-        "signal_name_width"  : 200  ,
-        "signal_value_width" : 200  ,
-        "display_rows"       : 24   ,
-        "start_time"         : None ,
-        "end_time"           : None ,
-        "edge_slop"          : 3    ,
+        "header_height"      : 24    ,
+        "footer_height"      : 24    ,
+        "signal_height"      : 24    ,
+        "signal_name_width"  : 200   ,
+        "signal_value_width" : 200   ,
+        "display_rows"       : 24    ,
+        "start_time"         : None  ,
+        "end_time"           : None  ,
+        "time_quantum"       : "1 ns",
+        "edge_slope"         : 3     ,
         "color"              : {
-              "name"  : {"background": "black", "foreground"   : "white"},
-              "value" : {"background": "black", "foreground"   : "white"},
-              "wave"  : {"background": "black",
-                         "signal" : "#00ff00",
-                         "value"  : "white"  ,
-                         "group"  : None},
+              "cursor"    : "yellow",
+              "marker"    : "red"   ,
+              "header"    : {"background": "black", "foreground"   : "white"},
+              "time_ruler": {"background": "black",
+                             "line"      : "gray" ,
+                             "text"      : "white"},
+              "name"      : {"background": "black", "foreground"   : "white"},
+              "value"     : {"background": "black", "foreground"   : "white"},
+              "wave"      : {"background": "black",
+                             "signal" : "#00ff00",
+                             "value"  : "white"  ,
+                             "group"  : None},
         }
     }
-    INHERITED_OPTION_LIST = ["color"]
+    INHERITABLE_OPTION = {"color": {"name": True, "value": True, "wave": True}}
     
     def __init__(self, file_name, option=None):
         self.file_name      = file_name
@@ -387,8 +398,9 @@ class FST_Wave_View_Model:
         self.option         = self.merge_option(option, self.DEFAULT_OPTION)
         self.child_option   = self.get_inherited_option(self.option)
         self.reader.read_tree()
-        self.start_time     = self.parse_time(self.option["start_time"])
-        self.end_time       = self.parse_time(self.option["end_time"  ])
+        self.start_time     = self.parse_time(self.option["start_time"  ])
+        self.end_time       = self.parse_time(self.option["end_time"    ])
+        self.time_quantum   = self.parse_time(self.option["time_quantum"])
         if self.start_time is None or self.start_time < self.reader.start_time:
             self.start_time = self.reader.start_time
         if self.end_time   is None or self.end_time   > self.reader.end_time  :
@@ -458,8 +470,18 @@ class FST_Wave_View_Model:
                 base_option[new_key] = self.deep_copy(new_value)
         return base_option
 
-    def get_inherited_option(self, option):
-        return {key: self.option[key] for key in self.INHERITED_OPTION_LIST}
+    def get_inherited_option(self, option, inheritable_option=None):
+        if inheritable_option is None:
+            return self.get_inherited_option(option, self.INHERITABLE_OPTION)
+        new_option = {}
+        for key,value in inheritable_option.items():
+            if key not in option:
+                continue
+            if value is True:
+                new_option[key] = self.deep_copy(option[key])
+            elif isinstance(value, dict) and isinstance(option[key], dict):
+                new_option[key] = self.get_inherited_option(option[key], value)
+        return new_option
         
     def add_view_list(self, name, option=None):
         new_option  = self.merge_option(option, self.child_option)
@@ -588,3 +610,9 @@ class FST_Wave_View_Model:
 
     def get_option(self, key, default_value=None):
         return self.option.get(key, default_value)
+
+    def get_color(self, key, prop=None, default_value=None):
+        color = self.get_option("color", {})
+        if prop is None:
+            return color.get(key, default_value)
+        return color.get(key,{}).get(prop, default_value)
