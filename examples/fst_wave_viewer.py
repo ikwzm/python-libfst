@@ -592,22 +592,45 @@ class WaveformSignals(QWidget):
                     item  = self.view_list.row_to_item(row)
                     if self.view_list.item_is_group(item):
                         draw_group(item, y)
+                        continue
                     if self.view_list.item_is_signal(item):
                         draw_signal(item, y)
+                        continue
+                    if self.view_list.item_is_clock(item):
+                        draw_signal(item, y)
+                        continue
 
-            def draw_grid():
+            def draw_simple_grid(tick_count):
                 time_range = end_time - start_time
-                tick_count = 10
                 tick_step  = time_range / tick_count
                 pen = QPen(Qt.gray)
                 pen.setStyle(Qt.DashLine)
                 pen.setWidth(1)
                 painter.setPen(pen)
-                
                 for i in range(tick_count + 1):
                     time = start_time + i * tick_step
                     x = self.time_to_x(time)
                     painter.drawLine(x, 0, x, height)
+
+            def draw_clock_grid(clock):
+                pen = QPen(Qt.gray)
+                pen.setStyle(Qt.DashLine)
+                pen.setWidth(1)
+                painter.setPen(pen)
+                prev_x = 0
+                for time in clock.get_edges(start_time, end_time):
+                    if time > end_time:
+                        break
+                    curr_x = self.time_to_x(time)
+                    if curr_x - prev_x > 10:
+                        painter.drawLine(curr_x, 0, curr_x, height)
+                        prev_x = curr_x
+
+            def draw_grid():
+                if self.view_list.clock is not None:
+                    draw_clock_grid(self.view_list.clock)
+                else:
+                    draw_simple_grid(10)
 
             draw_background()
             draw_grid()
