@@ -178,6 +178,111 @@ class FST_Wave_View_Model:
                     result = " " * padding + result
             return self.value_format_prefix + result + self.value_format_suffix
             
+    class View_Clock(View_Item):
+        DEFAULT_OPTION = {
+            "display_name"    : None,
+            "display_wave"    : False,
+            "rising_edge"     : True
+        }
+        def __init__(self, view_list, name, parent_group, option=None):
+            super().__init__(view_list, parent_group, option)
+            self.name         = name
+            self.closed       = False
+            self.display_name = self.option["display_name"] or self.name
+            self.display_wave = self.option["display_wave"]
+            self.rising_edge  = self.option["rising_edge"]
+
+        def close(self):
+            if self.closed is True:
+                return
+            self.closed = True
+
+        def register_database(self):
+            pass
+
+        def unregister_database(self):
+            pass
+
+    class View_Signal_Clock(View_Clock):
+        DEFAULT_OPTION = {
+            "display_name"    : None ,
+            "display_wave"    : False,
+            "rising_edge"     : True ,
+        }
+        def __init__(self, signal, option=None):
+            super().__init__(signal.view_list, signal.name, signal.parent_group, option)
+            self.signal   = signal
+            self.option   = self.model.merge_option(self.signal.option, self.option)
+            self.is_logic = signal.is_logic
+            
+        def register_database(self):
+            self.signal.register_database()
+
+        def unregister_database(self):
+            self.signal.unregister_database()
+
+        def get_edges(self, start_time, end_time):
+            if self.model.closed is True:
+                raise RuntimeError("View_Model is closed")
+            prev_level = None
+            first      = True
+            for curr_time, curr_value in self.get_wave(start_time, end_time):
+                if curr_value in ("1", "h"):
+                    curr_level = 1
+                else:
+                    curr_level = 0
+                if first:
+                    first = False
+                    prev_level = curr_level
+                    continue
+                if ((self.rising_edge is True  and prev_level == 0 and curr_level == 1) or
+                    (self.rising_edge is False and prev_level == 1 and curr_level == 0)):
+                    yield curr_time
+                prev_level = curr_level
+                
+        def get_wave(self, start_time, end_time):
+            if self.model.closed is True:
+                raise RuntimeError("View_Model is closed")
+            return self.signal.get_wave(start_time, end_time)
+
+    class View_Virtual_Clock(View_Clock):
+        DEFAULT_OPTION = {
+            "display_name"    : None,
+            "display_wave"    : False,
+            "rising_edge"     : True
+        }
+        def __init__(self, view_list, name, cycle_time, offset_time, parent_group, option=None):
+            super().__init__(view_list, name, parent_group, option)
+            self.cycle_time  = cycle_time
+            self.offset_time = self.view_list.model.start_time + offset_time
+            self.is_logic    = True
+
+        def get_edges(self, start_time, end_time):
+            if self.model.closed is True:
+                raise RuntimeError("View_Model is closed")
+            first_time = (self.offset_time +
+                          ((start_time - self.offset_time                      ) // self.cycle_time)
+                          * self.cycle_time)
+            last_time  = (self.offset_time +
+                          ((end_time   - self.offset_time + self.cycle_time - 1) // self.cycle_time)
+                           * self.cycle_time)
+            for time in range(first_time, last_time, self.cycle_time):
+                    yield time
+
+        def get_wave(self, start_time, end_time):
+            if self.model.closed is True:
+                raise RuntimeError("View_Model is closed")
+            half_cycle_time = self.cycle_time // 2
+            if self.rising_edge:
+                first_half_level  = "1"
+                second_half_level = "0"
+            else:
+                first_half_level  = "0"
+                second_half_level = "1"
+            for time in self.get_edges(start_time, end_time):
+                yield (time                  , first_half_level )
+                yield (time + half_cycle_time, second_half_level)
+                    
 
     class View_Group(View_Item):
         DEFAULT_OPTION = {
@@ -221,6 +326,38 @@ class FST_Wave_View_Model:
                 raise RuntimeError("View_Group is closed")
             return self._add_signals(pattern, tree=self.model.reader.tree, option=option)
 
+        def add_signal_clock(self, pattern, option=None):
+            if self.closed is True:
+                raise RuntimeError("View_Group is closed")
+            if self.view_list.clock is not None:
+                raise RuntimeError("View_List already contains a clock")
+            var_list = self.model.reader.find_var_list(pattern)
+            if len(var_list) == 0:
+                raise RuntimeError(f'No clock matched the specified pattern: "{pattern}"')
+            if len(var_list) >= 2:
+                raise RuntimeError(f'Multiple signals matched the specified clock pattern: "{pattern}"')
+            path = "::".join(var_list[0][0])
+            node = var_list[0][1]
+            if "handle" not in node:
+                raise RuntimeError(f'The specified pattern does not match a signal: "{pattern}"')
+            signal = self.model.View_Signal(self.view_list, path, node, self, option)
+            clock  = self.model.View_Signal_Clock(signal, option)
+            self.item_list.append(clock)
+            self.view_list.clock = clock
+            return self
+            
+        def add_virtual_clock(self, name, cycle_time, offset_time, option=None):
+            if self.closed is True:
+                raise RuntimeError("View_Group is closed")
+            if self.view_list.clock is not None:
+                raise RuntimeError("View_List already contains a clock")
+            cycle  = self.model.parse_time(cycle_time)
+            offset = self.model.parse_time(offset_time)
+            clock  = self.model.View_Virtual_Clock(self.view_list, name, cycle, offset, self, option)
+            self.item_list.append(clock)
+            self.view_list.clock = clock
+            return self
+            
         def add_group(self, name, option=None):
             if self.closed is True:
                 raise RuntimeError("View_Group is closed")
@@ -254,6 +391,7 @@ class FST_Wave_View_Model:
             self.option         = self.model.merge_option(option, self.DEFAULT_OPTION)
             self.group_option   = self.model.get_inherited_option(self.option)
             self.root_group     = self.model.View_Group(self, "", None, self.group_option)
+            self.clock          = None
             self.view_item_list = []
             self.item_row_map   = {}
 
@@ -262,6 +400,7 @@ class FST_Wave_View_Model:
                 return
             self.root_group.close()
             self.root_group = None
+            self.clock      = None
             self.view_item_list.clear()
             self.item_row_map.clear()
                 
@@ -279,6 +418,18 @@ class FST_Wave_View_Model:
             group_option = self.model.merge_option(option, self.group_option)
             return self.root_group.add_group(name, group_option)
 
+        def add_signal_clock(self, pattern, option=None):
+            if self.root_group is None:
+                raise RuntimeError("View_List is closed")
+            clock_option = self.model.merge_option(option, self.group_option)
+            return self.root_group.add_signal_clock(pattern, clock_option)
+
+        def add_virtual_clock(self, name, cycle_time, offset_time, option=None):
+            if self.root_group is None:
+                raise RuntimeError("View_List is closed")
+            clock_option = self.model.merge_option(option, self.group_option)
+            return self.root_group.add_virtual_clock(name, cycle_time, offset_time, clock_option)
+        
         def rebuild(self):
             self.view_item_list.clear()
             self.item_row_map.clear()
@@ -288,10 +439,18 @@ class FST_Wave_View_Model:
 
         def _append_group_to_view_item_list(self, group):
             for item in group.items():
-                self.view_item_list.append(item)
+                if self.item_is_signal(item):
+                    self.view_item_list.append(item)
+                    continue
                 if self.item_is_group(item):
+                    self.view_item_list.append(item)
                     if item.expanded:
                         self._append_group_to_view_item_list(item)
+                    continue
+                if self.item_is_clock(item):
+                    if item.display_wave:
+                        self.view_item_list.append(item)
+                    continue
 
         def set_group_expand(self, group, expand):
             if group.view_list is not self:
@@ -341,6 +500,9 @@ class FST_Wave_View_Model:
 
         def item_is_signal(self, item):
             return isinstance(item, self.model.View_Signal)
+        
+        def item_is_clock(self, item):
+            return isinstance(item, self.model.View_Clock)
         
         def row_is_group(self, row):
             item = self.row_to_item(row)
@@ -532,6 +694,16 @@ class FST_Wave_View_Model:
         if self.closed is True:
             raise RuntimeError("View_Model is closed")
         return self.curr_view_list.add_group(name, option)
+
+    def add_signal_clock(self, pattern, option=None):
+        if self.closed is True:
+            raise RuntimeError("View_Model is closed")
+        return self.curr_view_list.add_signal_clock(pattern, option)
+
+    def add_virtual_clock(self, name, cycle_time, offset_time, option=None):
+        if self.closed is True:
+            raise RuntimeError("View_Model is closed")
+        return self.curr_view_list.add_virtual_clock(name, cycle_time, offset_time, option)
 
     def set_group_expand(self, group, expand):
         if self.closed is True:
