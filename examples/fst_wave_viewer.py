@@ -975,15 +975,9 @@ class HeaderArea(QWidget):
 
         self.time_ruler.setFixedHeight(self.height)
 
-        self.padding_space.setFixedWidth(self.signal_scrollbar_width)
-        self.padding_space.setFixedHeight(self.height)
-        self.padding_space.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
         background_color = self.view_model.get_color("header", "background", "black")
         foreground_color = self.view_model.get_color("header", "foreground", "white")
-        for column in (self.signal_name_column,
-                       self.signal_value_column,
-                       self.padding_space):
+        for column in (self.signal_name_column, self.signal_value_column):
             column.setAutoFillBackground(True)
             palette = column.palette()
             palette.setColor(QPalette.ColorRole.Window    , QColor(background_color))
@@ -997,7 +991,6 @@ class HeaderArea(QWidget):
         layout.addWidget(self.signal_name_column)
         layout.addWidget(self.signal_value_column)
         layout.addWidget(self.time_ruler, 1)
-        layout.addWidget(self.padding_space)
 
     def set_time_range(self, start_time, end_time):
         self.time_ruler.set_time_range(start_time, end_time)
@@ -1008,48 +1001,80 @@ class HeaderArea(QWidget):
     class TimeRuler(QWidget):
         def __init__(self, parent=None):
             super().__init__(parent)
-            self.parent           = parent
-            self.view_model       = self.parent.view_model
-            self.time_controller  = self.parent.time_controller
-            self.background_color = self.view_model.get_color("time_ruler", "background", "black")
-            self.line_color       = self.view_model.get_color("time_ruler", "line"      , "gray" )
-            self.text_color       = self.view_model.get_color("time_ruler", "text"      , "white")
+            self.parent             = parent
+            self.view_model         = self.parent.view_model
+            self.time_controller    = self.parent.time_controller
+            self.time_quantum       = self.time_controller.time_quantum
+            self.start_time         = self.time_controller.start_time
+            self.end_time           = self.time_controller.end_time
+            self.right_margin_width = self.parent.signal_scrollbar_width
+            self.background_color   = self.view_model.get_color("time_ruler", "background", "black")
+            self.line_color         = self.view_model.get_color("time_ruler", "line"      , "gray" )
+            self.text_color         = self.view_model.get_color("time_ruler", "text"      , "white")
+            self.PERIOD_TIME_LIST   = [self.view_model.parse_time("1000 s"),
+                                       self.view_model.parse_time("100 s"),
+                                       self.view_model.parse_time("10 s"),
+                                       self.view_model.parse_time("1 s"),
+                                       self.view_model.parse_time("100 ms"),
+                                       self.view_model.parse_time("10 ms"),
+                                       self.view_model.parse_time("1 ms"),
+                                       self.view_model.parse_time("100 us"),
+                                       self.view_model.parse_time("10 us"),
+                                       self.view_model.parse_time("1 us"),
+                                       self.view_model.parse_time("100 ns"),
+                                       self.view_model.parse_time("10 ns"),
+                                       self.view_model.parse_time("1 ns"),
+                                     ]
+        def calc_period_time(self, start_time, end_time):
+            time_range = end_time - start_time
+            for period_time in self.PERIOD_TIME_LIST:
+                if (time_range // period_time) >= 1:
+                    return period_time
+            return self.PERIOD_TIME_LIST[-1]
 
         def set_time_range(self, start_time, end_time):
+            if start_time == self.start_time and end_time == self.end_time:
+                return
+            self.start_time = start_time
+            self.end_time   = end_time
             self.update()
 
+        def time_to_x(self, time):
+            width = self.width() - self.right_margin_width
+            if self.end_time == self.start_time:
+                return 0
+            return int((time - self.start_time) * width / (self.end_time - self.start_time))
+
         def paintEvent(self, event):
-            start_time = self.time_controller.start_time
-            end_time   = self.time_controller.end_time
-            
             painter = QPainter(self)
             painter.fillRect(self.rect(), QColor(self.background_color))
-
-            width  = self.width()
             height = self.height()
+            start_time  = self.start_time
+            end_time    = self.end_time
+            period_time = self.calc_period_time(start_time, end_time)
+            step_time   = period_time // 10
+            first_time  = ((start_time                ) // period_time) * period_time
+            last_time   = ((end_time + period_time - 1) // period_time) * period_time
+            prev_x      = None
 
-            painter.setPen(QPen(QColor(self.line_color)))
-            painter.drawLine(0, height - 1, width, height - 1)
-
-            if end_time <= start_time:
-                return
-
-            time_range = end_time - start_time
-
-            tick_count = 10
-            tick_step = time_range / tick_count
-
-            for i in range(tick_count + 1):
-                time = start_time + i * tick_step
-                x = int((time - start_time) / time_range * width)
-                painter.setPen(QPen(QColor(self.line_color)))
-                painter.drawLine(x, height - 8, x, height)
-
-                text = str(self.view_model.format_timestamp(time))
-                painter.setPen(QPen(QColor(self.text_color)))
-                fm = painter.fontMetrics()
-                text_width = fm.horizontalAdvance(text)
-                painter.drawText(x - text_width // 2, 15, text)
+            for base_time in range(first_time, last_time, period_time):
+                for i in range(10):
+                    time   = base_time + i * step_time
+                    curr_x = self.time_to_x(time)
+                    if prev_x is None:
+                        time_width = 0
+                    else:
+                        time_width = curr_x - prev_x
+                    if time >= self.start_time and time <= self.end_time:
+                        text = str(self.view_model.format_timestamp(time))
+                        painter.setPen(QPen(QColor(self.text_color)))
+                        fm = painter.fontMetrics()
+                        text_width = fm.horizontalAdvance(text)
+                        if i == 0 or text_width <= time_width:
+                            painter.drawText(curr_x - text_width // 2, 15, text)
+                        painter.setPen(QPen(QColor(self.line_color)))
+                        painter.drawLine(curr_x, height - 8, curr_x, height)
+                    prev_x = curr_x
 
 class FooterArea(QWidget):
     def __init__(self, view_model, parent=None):
