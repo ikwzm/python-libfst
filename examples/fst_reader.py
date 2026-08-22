@@ -352,15 +352,22 @@ class FST_Reader:
         if time_scale is None:
             time_scale = self.time_scale
         for unit_scale, unit in self.TIME_UNITS:
-            value = timestamp * (10 ** (time_scale - unit_scale))            
-            if value >= 1 and value == int(value):
-                return f"{int(value)} {unit}"
+            scale = time_scale - unit_scale
+            if scale >= 0:
+                value = timestamp * (10 ** scale)
+                if value >= 1:
+                    return f"{int(value)} {unit}"
+            else:
+                divisor = 10 ** (-scale)
+                if timestamp >= divisor and timestamp % divisor == 0:
+                    value = timestamp // divisor
+                    return f"{int(value)} {unit}"
         for unit_scale, unit in self.TIME_UNITS:
             value = timestamp * (10 ** (time_scale - unit_scale))            
             if value >= 1:
                 return f"{value:g} {unit}"
         unit_scale, unit = self.TIME_UNITS[-1]
-        value = timestamp * (10 ** time_scale - unit_scale)
+        value = timestamp * (10 ** (time_scale - unit_scale))
         return f"{value:g} {unit}"
 
     def parse_timestamp(self, value, unit=None, time_scale=None):
