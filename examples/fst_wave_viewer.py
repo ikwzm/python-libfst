@@ -4,11 +4,12 @@
 
 import sys
 import runpy
+import argparse
 
 from PySide6.QtCore    import Qt
 from PySide6.QtCore    import QAbstractTableModel, QModelIndex
-from PySide6.QtCore    import QRect, QSize, QTimer, Signal, QPoint
-from PySide6.QtGui     import QPainter, QPen, QBrush, QFontMetrics, QColor, QPalette, QAction
+from PySide6.QtCore    import QRect, QTimer, Signal, QPoint
+from PySide6.QtGui     import QPainter, QPen, QColor, QPalette, QAction
 from PySide6.QtWidgets import (
     QApplication,
     QTableView,
@@ -23,13 +24,23 @@ from PySide6.QtWidgets import (
 )
 from fst_wave_view_model import FST_Wave_View_Model
 
-DEFAULT_HEADER_HEIGHT      = 24
-DEFAULT_SIGNAL_HEIGHT      = 24
-DEFAULT_FOOTER_HEIGHT      = 20
-DEFAULT_SIGNAL_NAME_WIDTH  = 300
-DEFAULT_SIGNAL_VALUE_WIDTH = 300
-DEFAULT_SCROLLBAR_WIDTH    = 24
-DEFAULT_DISPLAY_ROW_COUNT  = 25
+APPLICATION_INFO = {
+    "Version"           : "0.5.0",
+    "Author"            : "Ichiro Kawazome",
+    "Author_Email"      : "ichiro_k@ca2-so-net.ne.jp",
+    "License"           : "BSD 2-Clause",
+    "Description"       : "FST Waveform Viewer",
+}
+
+DEFAULT_VALUES = {
+    "header_height"     :  24,
+    "signal_height"     :  24,
+    "footer_height"     :  20,
+    "signal_name_width" : 300,
+    "signal_value_width": 300,
+    "scrollbar_width"   :  24,
+    "display_row_count" :  25,
+}
 
 class WaveformSignals(QWidget):
     "View_List クラスで指定されている各信号の名称、値、波形を表示するエリア"
@@ -387,6 +398,8 @@ class WaveformSignals(QWidget):
                     self.refresh()
 
     class SignalWaveformColumn(QWidget):
+        "View_List クラスで指定されている各信号の波形をするクラス"
+        " このアプリケーションのメイン部分"
         def __init__(self, parent=None):
             super().__init__(parent)
             self.parent             = parent
@@ -637,6 +650,7 @@ class WaveformSignals(QWidget):
             draw_foreground()
 
     class SignalScrollBar(QScrollBar):
+        "View_List クラスで指定されている信号群から表示する信号を選択するためのスクロールバー"
         def __init__(self, parent=None):
             super().__init__(Qt.Vertical, parent)
             self.parent            = parent
@@ -656,8 +670,11 @@ class WaveformSignals(QWidget):
             self.setSingleStep(1)
 
 class WaveformArea(QWidget):
-    "複数のView_List クラスで指定されている各信号の名称、値、波形を表示するエリア"
-    "ただし、現バージョンでは一つだけしか表示していない"
+    "アプリケーションウィンドウの波形表示部"
+    " このエリアは次の３つのエリアを重ねている"
+    "   * WaveformSignals : View_List クラスで指定されている各信号の名称、値、波形を表示するエリア"
+    "   * MarkerWidget    : マーカーを描画するための Widget"
+    "   * CursorWidget    : カーソルを描画するための Widget"
     def __init__(self, view_model, parent=None):
         super().__init__(parent)
         self.parent                 = parent
@@ -720,6 +737,8 @@ class WaveformArea(QWidget):
         self.cursor_widget.set_current_time(current_time)
 
     class MarkerWidget(QWidget):
+        "マーカーを描画するための Widget"
+        " current_time で指定された時間の所にマーカー(縦線)を描く"
         def __init__(self, parent=None):
             super().__init__(parent)
             self.parent          = parent
@@ -769,6 +788,11 @@ class WaveformArea(QWidget):
             )
         
     class CursorWidget(QWidget):
+        "カーソルを描画するための Widget"
+        " マウスの左右移動でカーソル(縦線)を左右に移動"
+        " マウスの上下スクロールで表示する信号をスクロール"
+        " マウスの左クリックで current_time を指定"
+        " マウスの右クリックでメニューポップアップ(表示している時間範囲を変更)"
         def __init__(self, parent=None):
             super().__init__(parent)
             self.parent          = parent
@@ -950,6 +974,11 @@ class WaveformArea(QWidget):
 
 
 class HeaderArea(QWidget):
+    "アプリケーションウィンドウのヘッダ部"
+    " このエリアは次の３つのエリアを横に並べている"
+    "   * QLabel('Signal Name')  : 'Signal Name' ラベル"
+    "   * QLabel('Signal Value') : 'Signal Value' ラベル"
+    "   * TimeRuler              : 現在表示している時間範囲を表示する Widget"
     def __init__(self, view_model, parent=None):
         super().__init__(parent)
         self.parent                 = parent
@@ -959,7 +988,7 @@ class HeaderArea(QWidget):
         self.signal_value_width     = self.parent.signal_value_width
         self.signal_scrollbar_width = self.parent.signal_scrollbar_width
         self.height                 = self.view_model.get_option("header_height",
-                                      DEFAULT_HEADER_HEIGHT)
+                                      DEFAULT_VALUES["header_height"])
         self.signal_name_column     = QLabel("Signal Name", self)
         self.signal_value_column    = QLabel("Value", self)
         self.time_ruler             = self.TimeRuler(self)
@@ -999,6 +1028,7 @@ class HeaderArea(QWidget):
         pass
 
     class TimeRuler(QWidget):
+        "現在表示している時間範囲を表示する Widget"
         def __init__(self, parent=None):
             super().__init__(parent)
             self.parent             = parent
@@ -1077,6 +1107,12 @@ class HeaderArea(QWidget):
                     prev_x = curr_x
 
 class FooterArea(QWidget):
+    "アプリケーションウィンドウのフッター部"
+    " このエリアは次の４つのエリアを横に並べている"
+    "   * SignalNameScrollBar  : Signal Name  用のスクロールバー(但し現在は未実装)"
+    "   * SignalValueScrollBar : Signal Value 用のスクロールバー(但し現在は未実装)"
+    "   * TimeRangeScrollBar   : 表示する時間範囲を変更するためのスクロールバー"
+    "   * QLabel('')           : SignalScrollBar の幅分をパディングするためのダミー Widget"
     def __init__(self, view_model, parent=None):
         super().__init__(parent)
         self.parent                 = parent
@@ -1086,7 +1122,7 @@ class FooterArea(QWidget):
         self.signal_value_width     = self.parent.signal_value_width
         self.signal_scrollbar_width = self.parent.signal_scrollbar_width
         self.height                 = self.view_model.get_option("footer_height",
-                                      DEFAULT_FOOTER_HEIGHT)
+                                      DEFAULT_VALUES["footer_height"])
         self.signal_name_scrollbar  = self.SignalNameScrollBar(self)
         self.signal_value_scrollbar = self.SignalValueScrollBar(self)
         self.time_range_scrollbar   = self.TimeRangeScrollBar(self)
@@ -1122,6 +1158,7 @@ class FooterArea(QWidget):
         pass
 
     class SignalNameScrollBar(QScrollBar):
+        "Signal Name  用のスクロールバー(但し現在は未実装)"
         def __init__(self, parent=None):
             super().__init__(Qt.Horizontal, parent)
             self.parent          = parent
@@ -1129,6 +1166,7 @@ class FooterArea(QWidget):
             self.time_controller = self.parent.time_controller
             
     class SignalValueScrollBar(QScrollBar):
+        "Signal Value 用のスクロールバー(但し現在は未実装)"
         def __init__(self, parent=None):
             super().__init__(Qt.Horizontal, parent)
             self.parent          = parent
@@ -1136,7 +1174,7 @@ class FooterArea(QWidget):
             self.time_controller = self.parent.time_controller
             
     class TimeRangeScrollBar(QScrollBar):
-        SCROLL_SCALE = 1000000
+        "表示する時間範囲を変更するためのスクロールバー"
         def __init__(self, parent=None):
             super().__init__(Qt.Horizontal, parent)
             self.parent           = parent
@@ -1175,7 +1213,12 @@ class FooterArea(QWidget):
             self.time_controller.change_time_range(start_time, end_time)
 
 class WaveformWindow(QMainWindow):
-
+    "アプリケーションウィンドウ"
+    " アプリケーションウィンドウは次の３つのエリアを縦に並べている"
+    "   * HeaderArea   : ヘッダ部   - QLabel('Signal Name'),QLabel('Signal value'),TimeRuler"
+    "   * WaveformArea : 波形表示部 - WaveformSignals, MarkerWidget, CursorWidget"
+    "   * FooterArea   : フッタ部   - SignalNameScrollBar, SignalValueScrollBar, TimeRangeScrollBar"
+    " 他に表示する時間範囲を管理するための TimeController クラスも内包している"
     def __init__(self, view_model, parent=None):
         super().__init__(parent)
         self.view_model      = view_model
@@ -1192,14 +1235,14 @@ class WaveformWindow(QMainWindow):
         layout.setSpacing(0)
 
         self.signal_name_width      = self.view_model.get_option("signal_name_width" ,
-                                      DEFAULT_SIGNAL_NAME_WIDTH)
+                                      DEFAULT_VALUES["signal_name_width"])
         self.signal_value_width     = self.view_model.get_option("signal_value_width",
-                                      DEFAULT_SIGNAL_VALUE_WIDTH)
+                                      DEFAULT_VALUES["signal_value_width"])
         self.signal_row_height      = self.view_model.get_option("signal_height"     ,
-                                      DEFAULT_SIGNAL_HEIGHT)
-        self.signal_scrollbar_width = DEFAULT_SCROLLBAR_WIDTH
+                                      DEFAULT_VALUES["signal_height"])
+        self.signal_scrollbar_width = DEFAULT_VALUES["scrollbar_width"]
         self.visible_row_count      = self.view_model.get_option("display_rows"      ,
-                                      DEFAULT_DISPLAY_ROW_COUNT)
+                                      DEFAULT_VALUES["display_row_count"])
 
         self.header_area            = HeaderArea(self.view_model,self)
         self.signal_waveform_area   = WaveformArea(self.view_model,self)
@@ -1243,28 +1286,39 @@ class WaveformWindow(QMainWindow):
             return int(((time + quantum - 1) // quantum) * quantum)
         
         def change_time_range(self, start_time, end_time):
+            # print("change_time_range(): start")
             if self.change_time_range_busy:
                 return
-            self.change_time_range_busy = True
+
             total_start_time = self.total_start_time
             total_end_time   = self.total_end_time
-            time_range       = end_time - start_time
+            time_range = end_time - start_time
             if time_range <= 0:
+                # print("change_time_range(): invalid time range")
                 return
-            if   start_time < total_start_time:
-                start_time = total_start_time
-                end_time   = start_time + time_range
-            elif end_time   > total_end_time:
-                end_time   = total_end_time
-                start_time = end_time   - time_range
-            start_time = self.align_time(   max(total_start_time, start_time))
-            end_time   = self.align_time_up(min(total_end_time  , end_time  ))
-            self.start_time = start_time
-            self.end_time   = end_time
-            self.parent.set_time_range(start_time, end_time)
-            QTimer.singleShot(0, self.change_time_range_finished)
 
+            self.change_time_range_busy = True
+            try:
+                if   start_time < total_start_time:
+                    start_time = total_start_time
+                    end_time   = start_time + time_range
+                elif end_time   > total_end_time:
+                    end_time   = total_end_time
+                    start_time = end_time   - time_range
+                start_time = self.align_time(   max(total_start_time, start_time))
+                end_time   = self.align_time_up(min(total_end_time  , end_time  ))
+                self.start_time = start_time
+                self.end_time   = end_time
+                # print("change_time_range(): set_time_range() start")
+                self.parent.set_time_range(start_time, end_time)
+                # print("change_time_range(): set_time_range() done")
+                QTimer.singleShot(0, self.change_time_range_finished)
+            except Exception:
+                self.change_time_range_busy = False
+                raise
+    
         def change_time_range_finished(self):
+            # print("change_time_range_finished")
             self.change_time_range_busy = False
 
         def change_current_time(self, current_time):
@@ -1287,18 +1341,28 @@ def load_config(config_file, file_name):
     return viewer
 
 def main():
+    parser = argparse.ArgumentParser(description=APPLICATION_INFO["Description"])
+    parser.add_argument("file_name"         , metavar="FILE" , help="Input FST file" )
+    parser.add_argument("-C", "--config"    , metavar="FILE" , help="Configuration File")
+    parser.add_argument("-S", "--start-time", metavar="TIME", default=None,
+                        help="Start Time (default: Simulation timestamp at the beginning of the FST data)")
+    parser.add_argument("-E", "--end-time"  , metavar="TIME", default=None,
+                        help="End Time (default: Simulation time at the end of the FST data)")
 
-    if len(sys.argv) != 3:
-        print(
-            f"Usage: {sys.argv[0]} "
-            f"CONFIG.py FILE.fst"
-        )
-        return 1
+    args = parser.parse_args()
 
-    config_file = sys.argv[1]
-    file_name   = sys.argv[2]
+    file_name   = args.file_name
+    config_file = args.config
 
     viewer = load_config(config_file, file_name)
+
+    if args.start_time is not None:
+        start_time = viewer.parse_time(args.start_time)
+        viewer.set_start_time(start_time)
+
+    if args.end_time is not None:
+        end_time   = viewer.parse_time(args.end_time)
+        viewer.set_end_time(end_time)
 
     viewer.rebuild()
     viewer.load_wave()
