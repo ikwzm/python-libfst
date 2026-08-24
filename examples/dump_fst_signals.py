@@ -72,7 +72,8 @@ if __name__ == '__main__':
             for name,var in signal_list:
                 name = "::".join(name)
                 name_list.append(name)
-                var_list.append((name, var["width"], var["handle"]))
+                if "handle" in var:
+                    var_list.append((name, var["width"], var["handle"]))
 
             for name, width, handle in var_list:
                 print(f"{handle:6d} {name}", file=out)
