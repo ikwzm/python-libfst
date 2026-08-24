@@ -572,6 +572,16 @@ class FST_Wave_View_Model:
         self.curr_view_list = self.add_view_list("top")
         self.closed         = False
 
+    def set_start_time(self, start_time):
+        self.start_time = start_time
+        if self.start_time is None or self.start_time < self.reader.start_time:
+            self.start_time = self.reader.start_time
+        
+    def set_end_time(self, end_time):
+        self.end_time = end_time
+        if self.end_time   is None or self.end_time   > self.reader.end_time  :
+            self.end_time   = self.reader.end_time
+        
     def parse_time(self, text):
         if text is None:
             return None
