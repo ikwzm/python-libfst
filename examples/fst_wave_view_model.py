@@ -98,8 +98,10 @@ class FST_Wave_View_Model:
                     else:
                         self.value_type = None
                     break
-            self.value_formatter = self.model.Value_Formatter(self.width, self.option["value_format"])
-
+            self.value_formatter = self.model.get_value_formatter(self.value_type,
+                                                                  self.width,
+                                                                  self.is_logic,
+                                                                  self.option["value_format"])
         def close(self):
             if self.closed is True:
                 return
@@ -123,7 +125,7 @@ class FST_Wave_View_Model:
             return self.model.database.get(self.handle, start_time, end_time)
 
         def format_value(self, value):
-            return self.value_formatter.format_value(value, self.is_logic)
+            return self.value_formatter.format_value(value)
             
     class View_Clock(View_Item):
         DEFAULT_OPTION = {
@@ -474,7 +476,7 @@ class FST_Wave_View_Model:
             color = self.get_option("color", {})
             return color.get(key,{}).get(prop, default_value)
 
-    class Value_Formatter:
+    class Value_Vector_Formatter:
         VALUE_FORMAT_RE = re.compile(
             r"^(?P<alternate>\#?)"
             r"(?P<zero>0?)"
@@ -482,13 +484,14 @@ class FST_Wave_View_Model:
             r"(?P<type>[bBoOxXd])"
             r"(?P<suffix>.*)$"
         )
-        def __init__(self, width=1, value_format=None):
+        def __init__(self, value_type, width=1, value_format=None):
+            self.value_type = value_type
             if value_format is not None:
                 self.value_format = value_format
-            elif width % 4 == 0:
-                self.value_format = f"#0{width // 4}x"
+            elif width >= 8 and width % 4 == 0:
+                self.value_format = f"#0{width // 4 + 2}x"
             else:
-                self.value_format = "b"
+                self.value_format = f"0{width}b"
             match = self.VALUE_FORMAT_RE.fullmatch(self.value_format)
             if match is None:
                 raise ValueError(f"Invalid format: {self.value_format!r}")
@@ -499,9 +502,9 @@ class FST_Wave_View_Model:
             self.format_suffix = match.group("suffix")
             if not format_alternate:
                 self.value_format_prefix = ""
-            elif self.format_type == "b":
+            elif self.format_type in ("b", "B"):
                 self.value_format_prefix = "0b"
-            elif self.format_type == "o":
+            elif self.format_type in ("o", "O"):
                 self.value_format_prefix = "0o"
             elif self.format_type == "x":
                 self.value_format_prefix = "0x"
@@ -510,24 +513,22 @@ class FST_Wave_View_Model:
             else:
                 self.value_format_prefix = ""
 
-        def format_value(self, value, is_logic = False):
-            if is_logic:
-                return value
+        def format_value(self, value):
             if all(c in "01" for c in value):
                 return format(int(value,2), self.value_format)
 
-            def _format_4state_bits(value, width):
+            def _format_4state_bits(value, bit_width):
                 result  = []
-                padding = (-len(value)) % width
+                padding = (-len(value)) % bit_width
                 value   = "0" * padding + value
-                for pos in range(0, len(value), width):
-                    bits = value[pos:pos + width]
+                for pos in range(0, len(value), bit_width):
+                    bits = value[pos:pos + bit_width]
                     if all(c in "01" for c in bits):
                         number = int(bits, 2)
                         result.append(format(number, self.format_type))
-                    elif "u" in bits or "U" in bits:
+                    elif any(c in "xXuU" for c in bits):
                         result.append("U")
-                    elif "z" in bits or "Z" in bits:
+                    elif any(c in "zZ"   for c in bits):
                         result.append("Z")
                     else:
                         result.append("?")
@@ -539,14 +540,61 @@ class FST_Wave_View_Model:
                 result = _format_4state_bits(value, 3)
             else:
                 result = value
-            if self.format_width is not None and len(result) < self.format_width:
-                padding = self.format_width - len(result)
-                if self.format_zero:
-                    result = "0" * padding + result
-                else:
-                    result = " " * padding + result
+
+            if self.format_width is not None:
+                content_width = self.format_width - len(self.value_format_prefix)
+                if len(result) < content_width:
+                    padding = content_width - len(result)
+                    if self.format_zero:
+                        result = "0" * padding + result
+                    else:
+                        result = " " * padding + result
             return self.value_format_prefix + result + self.format_suffix
 
+    class Value_Logic_Formatter:
+        def __init__(self, value_type, width=1, value_format=None):
+            self.value_type   = value_type
+            self.width        = width
+            if value_format is None:
+                self.value_format = ""
+            else:
+                self.value_format = value_format
+        def format_value(self, value):
+            return format(value, self.value_format)
+        
+    class Value_Other_Formatter:
+        def __init__(self, value_type, width, value_format=None):
+            self.value_type   = value_type
+            self.width        = width
+            if value_format is None:
+                self.value_format = ""
+            else:
+                self.value_format = value_format
+        def format_value(self, value):
+            return format(value, self.value_format)
+
+    def get_value_formatter(self, value_type, width, is_logic=False, value_format=None):
+        if is_logic is True:
+            return self.Value_Logic_Formatter(value_type, width, value_format)
+        if value_type in ("VHDL_BIT"              ,
+                          "VHDL_STD_ULOGIC"       ,
+                          "VHDL_STD_LOGIC"        ):
+            return self.Value_Logic_Formatter(value_type, width, value_format)
+        if value_type in ("VHDL_BIT_VECTOR"       ,
+                          "VHDL_STD_ULOGIC_VECTOR",
+                          "VHDL_STD_LOGIC_VECTOR" ,
+                          "VHDL_UNSIGNED"         ,
+                          "VHDL_SIGNED"           ,
+                          "SV_INTEGER" , "SV_UNSIGNED_INTEGER" ,
+                          "SV_BIT"     , "SV_UNSIGNED_BIT"     ,
+                          "SV_LOGIC"   , "SV_UNSIGNED_LOGIC"   ,
+                          "SV_INT"     , "SV_UNSIGNED_INT"     ,
+                          "SV_SHORTINT", "SV_UNSIGNED_SHORTINT",
+                          "SV_LONGINT" , "SV_UNSIGNED_LONGINT" ,
+                          "SV_BYTE"    , "SV_UNSIGNED_BYTE"    ):
+            return self.Value_Vector_Formatter(value_type, width, value_format)
+        return self.Value_Other_Formatter(value_type, width, value_format)
+        
     DEFAULT_OPTION = {
         "header_height"      : 24    ,
         "footer_height"      : 24    ,
