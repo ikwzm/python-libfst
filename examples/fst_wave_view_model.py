@@ -23,15 +23,23 @@ class FST_Wave_View_Model:
                 self.depth    = 0
             self.color_option = self.option["color"]
 
+            # Colors for SignalNameColumn
+            self.signal_name_color             = self.get_color("name" , "foreground")
+            self.signal_name_background_color  = self.get_color("name" , "background")
+
+            # Colors for SignalValueColumn
+            self.signal_value_color            = self.get_color("value", "foreground")
+            self.signal_value_background_color = self.get_color("value", "background")
+
+            # Colors for SignalWaveformColumn
+            self.wave_group_color              = self.get_color("wave" , "group"     )
+            self.wave_signal_color             = self.get_color("wave" , "signal"    )
+            self.wave_value_color              = self.get_color("wave" , "value"     )
+            self.wave_background_color         = self.get_color("wave" , "background")
+            
         def get_color(self, key, prop):
             return self.color_option.get(key,{}).get(prop)
 
-        def get_foreground_color(self, key):
-            return self.get_color(key, "foreground")
-
-        def get_background_color(self, key):
-            return self.get_color(key, "background")
-        
     class View_Signal(View_Item):
         DEFAULT_OPTION = {
             "display_name"    : None ,
@@ -394,6 +402,8 @@ class FST_Wave_View_Model:
             self.clock          = None
             self.view_item_list = []
             self.item_row_map   = {}
+            
+            self.background_color = self.get_color("wave", "background", "black")
 
         def close(self):
             if self.root_group is None:
