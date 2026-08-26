@@ -25,7 +25,7 @@ from PySide6.QtWidgets import (
 from fst_wave_view_model import FST_Wave_View_Model
 
 APPLICATION_INFO = {
-    "Version"           : "0.5.2",
+    "Version"           : "0.5.3",
     "Author"            : "Ichiro Kawazome",
     "Author_Email"      : "ichiro_k@ca2-so-net.ne.jp",
     "License"           : "BSD 2-Clause",
@@ -490,8 +490,8 @@ class WaveformSignals(QWidget):
                     painter.fillRect(rect, QColor(color))
                 
             def draw_signal(signal, y):
-                top    = y + 5
-                bottom = y + row_height - 5
+                top    = y              + signal.margin_top_height
+                bottom = y + row_height - signal.margin_bottom_height
                 height = bottom - top
 
                 edge_slope_width     = signal.edge_slope_width

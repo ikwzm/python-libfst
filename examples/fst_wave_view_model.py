@@ -38,7 +38,9 @@ class FST_Wave_View_Model:
             self.wave_value_color              = self.get_color("wave" , "value"     )
             self.wave_background_color         = self.get_color("wave" , "background")
             # Shape for SignalWaveformColumn
-            self.edge_slope_width              = self.shape_option.get("edge_slope_width", 0)
+            self.edge_slope_width              = self.shape_option.get("edge_slope_width"    , 0)
+            self.margin_top_height             = self.shape_option.get("margin_top_height"   , 5)
+            self.margin_bottom_height          = self.shape_option.get("margin_bottom_height", 5)
             
         def get_color(self, key, prop):
             return self.color_option.get(key,{}).get(prop)
@@ -549,7 +551,9 @@ class FST_Wave_View_Model:
         "end_time"           : None  ,
         "time_quantum"       : "1 ns",
         "shape"              : {
-            "edge_slope_width"  : 3     ,
+            "edge_slope_width"     : 3 ,
+            "margin_top_height"    : 5 ,
+            "margin_bottom_height" : 5 ,
         },
         "color"              : {
               "cursor"    : "yellow",
