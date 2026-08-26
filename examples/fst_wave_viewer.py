@@ -25,7 +25,7 @@ from PySide6.QtWidgets import (
 from fst_wave_view_model import FST_Wave_View_Model
 
 APPLICATION_INFO = {
-    "Version"           : "0.5.4",
+    "Version"           : "0.5.5",
     "Author"            : "Ichiro Kawazome",
     "Author_Email"      : "ichiro_k@ca2-so-net.ne.jp",
     "License"           : "BSD 2-Clause",
