@@ -25,7 +25,7 @@ from PySide6.QtWidgets import (
 from fst_wave_view_model import FST_Wave_View_Model
 
 APPLICATION_INFO = {
-    "Version"           : "0.5.1",
+    "Version"           : "0.5.2",
     "Author"            : "Ichiro Kawazome",
     "Author_Email"      : "ichiro_k@ca2-so-net.ne.jp",
     "License"           : "BSD 2-Clause",
@@ -466,7 +466,6 @@ class WaveformSignals(QWidget):
             row_height   = self.parent.signal_row_height
             first_row    = self.row_scroll_value
             row_count    = self.view_list.row_count()
-            edge_slope   = self.view_list.model.get_option("edge_slope", 0)
             visible_rows = self.visible_row_count
 
             def draw_background():
@@ -495,7 +494,7 @@ class WaveformSignals(QWidget):
                 bottom = y + row_height - 5
                 height = bottom - top
 
-                edge_slope_width     = edge_slope
+                edge_slope_width     = signal.edge_slope_width
                 edge_slope_threshold = edge_slope_width*3
                 edge_slope_enabled   = (edge_slope_width != 0)
 

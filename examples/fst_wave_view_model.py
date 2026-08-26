@@ -22,6 +22,7 @@ class FST_Wave_View_Model:
                 self.option   = self.model.merge_option(option, self.DEFAULT_OPTION)
                 self.depth    = 0
             self.color_option = self.option["color"]
+            self.shape_option = self.option["shape"]
 
             # Colors for SignalNameColumn
             self.signal_name_color             = self.get_color("name" , "foreground")
@@ -36,6 +37,8 @@ class FST_Wave_View_Model:
             self.wave_signal_color             = self.get_color("wave" , "signal"    )
             self.wave_value_color              = self.get_color("wave" , "value"     )
             self.wave_background_color         = self.get_color("wave" , "background")
+            # Shape for SignalWaveformColumn
+            self.edge_slope_width              = self.shape_option.get("edge_slope_width", 0)
             
         def get_color(self, key, prop):
             return self.color_option.get(key,{}).get(prop)
@@ -545,7 +548,9 @@ class FST_Wave_View_Model:
         "start_time"         : None  ,
         "end_time"           : None  ,
         "time_quantum"       : "1 ns",
-        "edge_slope"         : 3     ,
+        "shape"              : {
+            "edge_slope_width"  : 3     ,
+        },
         "color"              : {
               "cursor"    : "yellow",
               "marker"    : "red"   ,
@@ -561,7 +566,7 @@ class FST_Wave_View_Model:
                              "group"  : None},
         }
     }
-    INHERITABLE_OPTION = {"color": {"name": True, "value": True, "wave": True}}
+    INHERITABLE_OPTION = {"color": {"name": True, "value": True, "wave": True}, "shape": True}
     
     def __init__(self, file_name, option=None):
         self.file_name      = file_name
