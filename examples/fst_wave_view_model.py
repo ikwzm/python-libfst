@@ -22,28 +22,34 @@ class FST_Wave_View_Model:
                 self.option   = self.model.merge_option(option, self.DEFAULT_OPTION)
                 self.depth    = 0
             self.color_option = self.option["color"]
+            self.shape_option = self.option["shape"]
 
+            # Colors for SignalNameColumn
+            self.signal_name_color             = self.get_color("name" , "foreground")
+            self.signal_name_background_color  = self.get_color("name" , "background")
+
+            # Colors for SignalValueColumn
+            self.signal_value_color            = self.get_color("value", "foreground")
+            self.signal_value_background_color = self.get_color("value", "background")
+
+            # Colors for SignalWaveformColumn
+            self.wave_group_color              = self.get_color("wave" , "group"     )
+            self.wave_signal_color             = self.get_color("wave" , "signal"    )
+            self.wave_value_color              = self.get_color("wave" , "value"     )
+            self.wave_background_color         = self.get_color("wave" , "background")
+            # Shape for SignalWaveformColumn
+            self.edge_slope_width              = self.shape_option.get("edge_slope_width"    , 0)
+            self.margin_top_height             = self.shape_option.get("margin_top_height"   , 5)
+            self.margin_bottom_height          = self.shape_option.get("margin_bottom_height", 5)
+            
         def get_color(self, key, prop):
             return self.color_option.get(key,{}).get(prop)
 
-        def get_foreground_color(self, key):
-            return self.get_color(key, "foreground")
-
-        def get_background_color(self, key):
-            return self.get_color(key, "background")
-        
     class View_Signal(View_Item):
         DEFAULT_OPTION = {
             "display_name"    : None ,
             "value_format"    : None ,
         }
-        VALUE_FORMAT_RE = re.compile(
-            r"^(?P<alternate>\#?)"
-            r"(?P<zero>0?)"
-            r"(?P<width>\d*)"
-            r"(?P<type>[bBoOxXd])"
-            r"(?P<suffix>.*)$"
-        )
         def __init__(self, view_list, path, node, parent_group, option=None):
             super().__init__(view_list, parent_group, option)
             self.path         = path
@@ -92,32 +98,7 @@ class FST_Wave_View_Model:
                     else:
                         self.value_type = None
                     break
-            self.value_format = self.option["value_format"]
-            if self.value_format is None:
-                if self.width % 4 == 0:
-                    self.value_format = f"#0{self.width // 4}x"
-                else:
-                    self.value_format = "b"
-            match = self.VALUE_FORMAT_RE.fullmatch(self.value_format)
-            if match is None:
-                raise ValueError(f"Invalid format: {self.value_format!r}")
-            self.value_format_alternate = bool(match.group("alternate"))
-            self.value_format_zero      = bool(match.group("zero"))
-            self.value_format_width     = int(match.group("width")) if match.group("width") else None
-            self.value_format_type      = match.group("type")
-            self.value_format_suffix    = match.group("suffix")
-            if not self.value_format_alternate:
-                self.value_format_prefix = ""
-            elif self.value_format_type == "b":
-                self.value_format_prefix = "0b"
-            elif self.value_format_type == "o":
-                self.value_format_prefix = "0o"
-            elif self.value_format_type == "x":
-                self.value_format_prefix = "0x"
-            elif self.value_format_type == "X":
-                self.value_format_prefix = "0X"
-            else:
-                self.value_format_prefix = ""
+            self.value_formatter = self.model.Value_Formatter(self.width, self.option["value_format"])
 
         def close(self):
             if self.closed is True:
@@ -142,41 +123,7 @@ class FST_Wave_View_Model:
             return self.model.database.get(self.handle, start_time, end_time)
 
         def format_value(self, value):
-            if self.is_logic:
-                return value
-            if all(c in "01" for c in value):
-                return format(int(value,2), self.value_format)
-
-            def _format_4state_bits(value, width):
-                result  = []
-                padding = (-len(value)) % width
-                value   = "0" * padding + value
-                for pos in range(0, len(value), width):
-                    bits = value[pos:pos + width]
-                    if all(c in "01" for c in bits):
-                        number = int(bits, 2)
-                        result.append(format(number, self.value_format_type))
-                    elif "u" in bits or "U" in bits:
-                        result.append("U")
-                    elif "z" in bits or "Z" in bits:
-                        result.append("Z")
-                    else:
-                        result.append("?")
-                return "".join(result)
-            
-            if   self.value_format_type in ("x", "X"):
-                result = _format_4state_bits(value, 4)
-            elif self.value_format_type == "o":
-                result = _format_4state_bits(value, 3)
-            else:
-                result = value
-            if self.value_format_width is not None and len(result) < self.value_format_width:
-                padding = self.value_format_width - len(result)
-                if self.value_format_zero:
-                    result = "0" * padding + result
-                else:
-                    result = " " * padding + result
-            return self.value_format_prefix + result + self.value_format_suffix
+            return self.value_formatter.format_value(value, self.is_logic)
             
     class View_Clock(View_Item):
         DEFAULT_OPTION = {
@@ -394,6 +341,8 @@ class FST_Wave_View_Model:
             self.clock          = None
             self.view_item_list = []
             self.item_row_map   = {}
+            
+            self.background_color = self.get_color("wave", "background", "black")
 
         def close(self):
             if self.root_group is None:
@@ -525,6 +474,79 @@ class FST_Wave_View_Model:
             color = self.get_option("color", {})
             return color.get(key,{}).get(prop, default_value)
 
+    class Value_Formatter:
+        VALUE_FORMAT_RE = re.compile(
+            r"^(?P<alternate>\#?)"
+            r"(?P<zero>0?)"
+            r"(?P<width>\d*)"
+            r"(?P<type>[bBoOxXd])"
+            r"(?P<suffix>.*)$"
+        )
+        def __init__(self, width=1, value_format=None):
+            if value_format is not None:
+                self.value_format = value_format
+            elif width % 4 == 0:
+                self.value_format = f"#0{width // 4}x"
+            else:
+                self.value_format = "b"
+            match = self.VALUE_FORMAT_RE.fullmatch(self.value_format)
+            if match is None:
+                raise ValueError(f"Invalid format: {self.value_format!r}")
+            format_alternate   = bool(match.group("alternate"))
+            self.format_zero   = bool(match.group("zero"))
+            self.format_width  = int(match.group("width")) if match.group("width") else None
+            self.format_type   = match.group("type")
+            self.format_suffix = match.group("suffix")
+            if not format_alternate:
+                self.value_format_prefix = ""
+            elif self.format_type == "b":
+                self.value_format_prefix = "0b"
+            elif self.format_type == "o":
+                self.value_format_prefix = "0o"
+            elif self.format_type == "x":
+                self.value_format_prefix = "0x"
+            elif self.format_type == "X":
+                self.value_format_prefix = "0X"
+            else:
+                self.value_format_prefix = ""
+
+        def format_value(self, value, is_logic = False):
+            if is_logic:
+                return value
+            if all(c in "01" for c in value):
+                return format(int(value,2), self.value_format)
+
+            def _format_4state_bits(value, width):
+                result  = []
+                padding = (-len(value)) % width
+                value   = "0" * padding + value
+                for pos in range(0, len(value), width):
+                    bits = value[pos:pos + width]
+                    if all(c in "01" for c in bits):
+                        number = int(bits, 2)
+                        result.append(format(number, self.format_type))
+                    elif "u" in bits or "U" in bits:
+                        result.append("U")
+                    elif "z" in bits or "Z" in bits:
+                        result.append("Z")
+                    else:
+                        result.append("?")
+                return "".join(result)
+            
+            if   self.format_type in ("x", "X"):
+                result = _format_4state_bits(value, 4)
+            elif self.format_type == "o":
+                result = _format_4state_bits(value, 3)
+            else:
+                result = value
+            if self.format_width is not None and len(result) < self.format_width:
+                padding = self.format_width - len(result)
+                if self.format_zero:
+                    result = "0" * padding + result
+                else:
+                    result = " " * padding + result
+            return self.value_format_prefix + result + self.format_suffix
+
     DEFAULT_OPTION = {
         "header_height"      : 24    ,
         "footer_height"      : 24    ,
@@ -535,7 +557,11 @@ class FST_Wave_View_Model:
         "start_time"         : None  ,
         "end_time"           : None  ,
         "time_quantum"       : "1 ns",
-        "edge_slope"         : 3     ,
+        "shape"              : {
+            "edge_slope_width"     : 3 ,
+            "margin_top_height"    : 5 ,
+            "margin_bottom_height" : 5 ,
+        },
         "color"              : {
               "cursor"    : "yellow",
               "marker"    : "red"   ,
@@ -551,7 +577,7 @@ class FST_Wave_View_Model:
                              "group"  : None},
         }
     }
-    INHERITABLE_OPTION = {"color": {"name": True, "value": True, "wave": True}}
+    INHERITABLE_OPTION = {"color": {"name": True, "value": True, "wave": True}, "shape": True}
     
     def __init__(self, file_name, option=None):
         self.file_name      = file_name

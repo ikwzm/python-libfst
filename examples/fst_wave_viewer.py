@@ -25,7 +25,7 @@ from PySide6.QtWidgets import (
 from fst_wave_view_model import FST_Wave_View_Model
 
 APPLICATION_INFO = {
-    "Version"           : "0.5.0",
+    "Version"           : "0.5.4",
     "Author"            : "Ichiro Kawazome",
     "Author_Email"      : "ichiro_k@ca2-so-net.ne.jp",
     "License"           : "BSD 2-Clause",
@@ -248,13 +248,13 @@ class WaveformSignals(QWidget):
 
                 if role == Qt.BackgroundRole:
                     if index.column() == self.SIGNAL_COLUMN:
-                        color = item.get_background_color("name")
+                        color = item.signal_name_background_color
                         if color is not None:
                             return QColor(color)
             
                 if role == Qt.ForegroundRole:
                     if index.column() == self.SIGNAL_COLUMN:
-                        color = item.get_foreground_color("name")
+                        color = item.signal_name_color
                         if color is not None:
                             return QColor(color)
             
@@ -360,13 +360,13 @@ class WaveformSignals(QWidget):
 
                 if role == Qt.BackgroundRole:
                     if index.column() == self.VALUE_COLUMN:
-                        color = item.get_background_color("value")
+                        color = item.signal_value_background_color
                         if color is not None:
                             return QColor(color)
             
                 if role == Qt.ForegroundRole:
                     if index.column() == self.VALUE_COLUMN:
-                        color = item.get_foreground_color("value")
+                        color = item.signal_value_color
                         if color is not None:
                             return QColor(color)
             
@@ -409,7 +409,7 @@ class WaveformSignals(QWidget):
             self.end_time           = self.time_controller.end_time
             self.visible_row_count  = self.parent.visible_row_count
             self.row_scroll_value   = 0
-            self.background_color   = self.view_list.get_color("wave", "background", "black")
+            self.background_color   = self.view_list.background_color
 
         def refresh(self):
             self.update()
@@ -466,7 +466,6 @@ class WaveformSignals(QWidget):
             row_height   = self.parent.signal_row_height
             first_row    = self.row_scroll_value
             row_count    = self.view_list.row_count()
-            edge_slope   = self.view_list.model.get_option("edge_slope", 0)
             visible_rows = self.visible_row_count
 
             def draw_background():
@@ -477,7 +476,7 @@ class WaveformSignals(QWidget):
                     y     = i * row_height
                     rect  = QRect(0, y, width, row_height)
                     item  = self.view_list.row_to_item(row)
-                    color = item.get_background_color("wave")
+                    color = item.wave_background_color
                     if color is not None:
                         painter.fillRect(rect, QColor(color))
 
@@ -486,23 +485,22 @@ class WaveformSignals(QWidget):
                 bottom = y + row_height - 5
                 height = bottom - top
                 rect   = QRect(0, top, width, height)
-                color  = group.get_color("wave", "group")
+                color  = group.wave_group_color
                 if color is not None:
                     painter.fillRect(rect, QColor(color))
                 
             def draw_signal(signal, y):
-                top    = y + 5
-                bottom = y + row_height - 5
+                top    = y              + signal.margin_top_height
+                bottom = y + row_height - signal.margin_bottom_height
                 height = bottom - top
 
-                edge_slope_width     = edge_slope
+                edge_slope_width     = signal.edge_slope_width
                 edge_slope_threshold = edge_slope_width*3
                 edge_slope_enabled   = (edge_slope_width != 0)
 
                 def draw_signal_value(signal, value, left, width):
                     value_text   = str(signal.format_value(value))
-                    value_color  = signal.get_color("wave", "value")
-                    painter.setPen(QPen(QColor(value_color)))
+                    painter.setPen(QPen(QColor(signal.wave_value_color)))
                     font_metrics = painter.fontMetrics()
                     value_rect   = font_metrics.tightBoundingRect(value_text)
                     left_margin  = 2
@@ -516,9 +514,8 @@ class WaveformSignals(QWidget):
                     
                 def draw_signal_logic(signal, curr_value, prev_value, left, right):
                     nonlocal edge_slope_enabled
-                    width        = right - left
-                    signal_color = signal.get_color("wave", "signal")
-                    pen = QPen(QColor(signal_color))
+                    width = right - left
+                    pen   = QPen(QColor(signal.wave_signal_color))
                     painter.setPen(pen)
                     if curr_value in ("1", "h"):
                         curr_level = top
@@ -541,9 +538,8 @@ class WaveformSignals(QWidget):
                         
                 def draw_signal_bus(signal, curr_value, prev_value, left, right):
                     width            = right - left
-                    background_color = signal.get_color("wave", "background")
-                    signal_color     = signal.get_color("wave", "signal"    )
-                    signal_pen       = QPen(QColor(signal_color))
+                    background_color = signal.wave_background_color
+                    signal_pen       = QPen(QColor(signal.wave_signal_color))
                     if curr_value != prev_value and edge_slope_enabled and width > edge_slope_threshold:
                         draw_left  = left  + edge_slope_width
                         draw_width = right - draw_left
