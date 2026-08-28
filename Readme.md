@@ -43,8 +43,8 @@ sudo apt install python3-dev python3-pip build-essential git
 Clone the repository with the FST library submodule:
 
 ```bash
-git clone --recurse-submodules https://github.com/ikwzm/python3-libfst.git
-cd python3-libfst
+git clone --recurse-submodules https://github.com/ikwzm/python-libfst.git
+cd python-libfst
 ```
 
 If the repository was cloned without submodules:
