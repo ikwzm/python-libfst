@@ -46,9 +46,15 @@ class FST_Wave_DataBase:
                 return False
             return ((start_time >= self.start_time) and (end_time <= self.end_time))
         
+        def update_loaded_time(self, start_time, end_time):
+            if self.start_time is None or self.start_time > start_time:
+                self.start_time = start_time
+            if self.end_time   is None or self.end_time   < end_time:
+                self.end_time = end_time
+
         def get(self, start_time, end_time):
             if not self.time_list:
-                return []
+                return iter(())
 
             # lo_pos  : start_time 以下の最後の変化位置
             lo_pos = bisect_right(self.time_list, start_time)
@@ -117,11 +123,14 @@ class FST_Wave_DataBase:
             if wave_signal is not None:
                 wave_signal.append(time, value)
 
+        for handle, wave_signal in require_load.items():
+            wave_signal.update_loaded_time(start_time, end_time)
+
     def get(self, handle, start_time, end_time):
         wave_signal = self.wave_signals.get(handle)
 
         if wave_signal is None:
-            return []
+            return iter(())
 
         if not wave_signal.is_loaded(start_time, end_time):
             self.load_wave_signals(start_time, end_time, {handle: wave_signal})
